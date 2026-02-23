@@ -48,6 +48,7 @@ COPY --from=builder /home/nonroot /home/nonroot
 COPY --from=builder /etc/passwd /etc/passwd
 COPY --from=builder /etc/group /etc/group
 COPY --from=builder /usr/lib/python3.12 /usr/lib/python3.12
+COPY --from=builder /usr/local /usr/local
 
 USER ${UID}:${GID}
 

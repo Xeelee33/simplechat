@@ -1,0 +1,34 @@
+services:
+  simplechat:
+    build:
+      context: .
+      dockerfile: application/single_app/Dockerfile
+    image: simplechat:local
+    volumes:
+      - ./application/single_app/.env:/app/.env:ro
+    environment:
+      FLASK_DEBUG: "0"
+      PORT: "5000"
+      FORCE_KEY_AUTH_FOR_LOCAL_DOCKER: "1"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/', timeout=5)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  local-https-proxy:
+    image: caddy:2
+    depends_on:
+      simplechat:
+        condition: service_healthy
+    ports:
+      - "5000:443"
+    volumes:
+      - ./Caddyfile.local-https:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -5,6 +5,32 @@ from functions_appinsights import log_event
 import app_settings_cache
 import inspect
 
+
+def apply_local_auth_overrides(settings_item):
+    force_key_auth = str(os.getenv("FORCE_KEY_AUTH_FOR_LOCAL_DOCKER", "")).strip().lower() in ("1", "true", "yes", "on")
+    if not force_key_auth or not isinstance(settings_item, dict):
+        return settings_item
+
+    overridden_settings = dict(settings_item)
+    key_auth_fields = [
+        "azure_openai_embedding_authentication_type",
+        "azure_openai_image_gen_authentication_type",
+        "azure_document_intelligence_authentication_type",
+        "azure_ai_search_authentication_type",
+        "content_safety_authentication_type",
+        "office_docs_authentication_type",
+        "video_files_authentication_type",
+        "audio_files_authentication_type",
+        "speech_service_authentication_type",
+        "redis_auth_type",
+    ]
+
+    for field_name in key_auth_fields:
+        if field_name in overridden_settings:
+            overridden_settings[field_name] = "key"
+
+    return overridden_settings
+
 def get_settings(use_cosmos=False):
     import secrets
     default_settings = {
@@ -365,20 +391,21 @@ def get_settings(use_cosmos=False):
 
         # Merge default_settings in, to fill in any missing or nested keys
         merged = deep_merge_dicts(default_settings, settings_item)
+        effective_settings = apply_local_auth_overrides(merged)
 
         # If merging added anything new, upsert back to Cosmos so future reads remain up to date
         if merged != settings_item:
             cosmos_settings_container.upsert_item(merged)
             print("App Settings had missing keys and was updated in Cosmos DB.")
-            return merged
+            return effective_settings
         else:
             # If merged is unchanged, no new keys needed
-            return merged
+            return effective_settings
 
     except CosmosResourceNotFoundError:
         cosmos_settings_container.create_item(body=default_settings)
         print("Default settings created in Cosmos and returned.")
-        return default_settings
+        return apply_local_auth_overrides(default_settings)
 
     except Exception as e:
         print(f"Error retrieving settings: {str(e)}")

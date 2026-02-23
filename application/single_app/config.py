@@ -88,7 +88,7 @@ load_dotenv()
 EXECUTOR_TYPE = 'thread'
 EXECUTOR_MAX_WORKERS = 30
 SESSION_TYPE = 'filesystem'
-VERSION = "0.237.011"
+VERSION = "0.237.013"
 
 SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
 
@@ -252,9 +252,9 @@ storage_account_group_documents_container_name = "group-documents"
 storage_account_public_documents_container_name = "public-documents"
 
 # Initialize Azure Cosmos DB client
-cosmos_endpoint = os.getenv("AZURE_COSMOS_ENDPOINT")
-cosmos_key = os.getenv("AZURE_COSMOS_KEY")
-cosmos_authentication_type = os.getenv("AZURE_COSMOS_AUTHENTICATION_TYPE", "key") #key or managed_identity
+cosmos_endpoint = (os.getenv("AZURE_COSMOS_ENDPOINT") or "").strip().strip('"').strip("'")
+cosmos_key = (os.getenv("AZURE_COSMOS_KEY") or "").strip().strip('"').strip("'")
+cosmos_authentication_type = (os.getenv("AZURE_COSMOS_AUTHENTICATION_TYPE", "key") or "key").strip().strip('"').strip("'").lower() # key or managed_identity
 
 if cosmos_authentication_type == "managed_identity":
     cosmos_client = CosmosClient(cosmos_endpoint, credential=DefaultAzureCredential(), consistency_level="Session")

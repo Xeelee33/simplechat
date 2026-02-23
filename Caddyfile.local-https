@@ -1,0 +1,8 @@
+{
+    auto_https disable_redirects
+}
+
+https://localhost, https://127.0.0.1, https://oigchat.local {
+    tls internal
+    reverse_proxy simplechat:5000
+}
