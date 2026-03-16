@@ -2,6 +2,28 @@
 
 # Feature Release
 
+### **(v0.239.014)**
+
+#### New Features
+
+*   **Azure AI Search Restore Scaffold**
+    *   Added a managed-identity restore scaffold script that recreates Azure AI Search indexes from backup artifacts (`manifest.json`, `index-schema.json`, `documents.jsonl`) for user, group, and public indexes.
+    *   Added restore planning controls including target index modes (`suffix` and `same`), overwrite confirmation requirements, retry handling, and batched document upload configuration.
+    *   Added dry-run restore mode that validates backup inputs and writes a restore manifest without requiring Azure SDK packages or live Azure connectivity.
+    *   Added a functional validation test for restore dry-run behavior, including target index suffix planning and restore manifest generation.
+    *   (Ref: `scripts/restore_ai_search_indexes.py`, `functional_tests/test_ai_search_restore_script_scaffold.py`, `docs/explanation/features/AZURE_AI_SEARCH_BACKUP_STRATEGY.md`, `application/single_app/config.py`)
+
+### **(v0.239.013)**
+
+#### New Features
+
+*   **Azure AI Search Backup Strategy Scaffold**
+    *   Added a managed-identity backup scaffold script that exports Azure AI Search index schema and documents for user, group, and public indexes into timestamped backup folders.
+    *   Added dry-run mode to validate backup folder structure and manifest generation without requiring Azure SDK packages or live Azure connectivity.
+    *   Added an implementation runbook documenting storage layout, job cadence, restore workflow, and initial RPO/RTO targets for operational resilience.
+    *   Added a functional validation test for dry-run backup scaffolding behavior.
+    *   (Ref: `scripts/backup_ai_search_indexes.py`, `docs/explanation/features/AZURE_AI_SEARCH_BACKUP_STRATEGY.md`, `functional_tests/test_ai_search_backup_script_scaffold.py`, `application/single_app/config.py`)
+
 ### **(v0.239.012)**
 
 #### New Features
