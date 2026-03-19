@@ -532,7 +532,7 @@ def is_idle_timeout_enabled(settings=None):
     if settings is None:
         settings = get_request_settings()
 
-    enabled_raw = settings.get('enable_idle_timeout', True)
+    enabled_raw = settings.get('enable_idle_timeout', False)
 
     if isinstance(enabled_raw, str):
         return enabled_raw.strip().lower() in ('1', 'true', 'yes', 'on')
@@ -542,6 +542,9 @@ def is_idle_timeout_enabled(settings=None):
 
 settings_source_counters = {}
 settings_source_counters_lock = threading.Lock()
+settings_source_last_observed = None
+settings_source_last_non_cache_log_epoch = 0
+settings_source_non_cache_log_interval_seconds = 60
 
 
 def record_request_settings_source(source):
@@ -558,12 +561,33 @@ def record_request_settings_source(source):
         None: Counter updates and diagnostics are handled internally.
     """
     normalized_source = source or 'unknown'
+    now_epoch = int(time.time())
+
+    global settings_source_last_observed
+    global settings_source_last_non_cache_log_epoch
+
     with settings_source_counters_lock:
         settings_source_counters[normalized_source] = settings_source_counters.get(normalized_source, 0) + 1
         cache_hits = settings_source_counters.get('cache', 0)
         cosmos_fallback_hits = settings_source_counters.get('cosmos_fallback', 0)
         cosmos_forced_hits = settings_source_counters.get('cosmos_forced', 0)
         unknown_hits = settings_source_counters.get('unknown', 0)
+
+        previous_source = settings_source_last_observed
+        source_changed = normalized_source != previous_source
+        settings_source_last_observed = normalized_source
+
+        non_cache_log_window_elapsed = (
+            now_epoch - settings_source_last_non_cache_log_epoch
+        ) >= settings_source_non_cache_log_interval_seconds
+
+        should_log_non_cache_info = (
+            normalized_source != 'cache'
+            and (source_changed or non_cache_log_window_elapsed)
+        )
+
+        if should_log_non_cache_info:
+            settings_source_last_non_cache_log_epoch = now_epoch
 
     g.request_settings_source = normalized_source
     debug_print(
@@ -575,12 +599,14 @@ def record_request_settings_source(source):
         unknown_hits=unknown_hits
     )
 
-    if normalized_source != 'cache':
+    if should_log_non_cache_info:
         log_event(
             "Request settings source is non-cache.",
             extra={
                 "path": request.path,
                 "settings_source": normalized_source,
+                "source_changed": source_changed,
+                "non_cache_log_window_elapsed": non_cache_log_window_elapsed,
                 "cache_hits": cache_hits,
                 "cosmos_fallback_hits": cosmos_fallback_hits,
                 "cosmos_forced_hits": cosmos_forced_hits,
@@ -672,21 +698,6 @@ def reload_kernel_if_needed():
         """
         setattr(builtins, "kernel_reload_needed", False)
 
-IDLE_TIMEOUT_EXEMPT_PATHS = {
-    '/login',
-    '/logout',
-    '/logout/local',
-    '/getAToken',
-    '/getATokenApi',
-    '/robots933456.txt',
-    '/favicon.ico'
-}
-
-IDLE_TIMEOUT_EXEMPT_PREFIXES = (
-    '/static/',
-    '/health',
-    '/api/health'
-)
 
 def _is_idle_timeout_exempt(path):
     """
@@ -704,49 +715,6 @@ def _is_idle_timeout_exempt(path):
     if path in IDLE_TIMEOUT_EXEMPT_PATHS:
         return True
     return any(path.startswith(prefix) for prefix in IDLE_TIMEOUT_EXEMPT_PREFIXES)
-
-
-@app.before_request
-def load_request_settings_cache():
-    """
-    Preload request-scoped settings for authenticated, non-exempt requests.
-
-    Args:
-        None
-
-    Returns:
-        None: Always returns None to continue Flask request processing.
-
-    Raises:
-        None: Unexpected settings resolver shapes are logged and converted to safe fallbacks.
-    """
-    g.request_settings = None
-    g.request_settings_source = None
-
-    if request.method == 'OPTIONS' or _is_idle_timeout_exempt(request.path):
-        return None
-
-    if 'user' not in session:
-        return None
-
-    settings_result = get_settings(include_source=True)
-    if isinstance(settings_result, tuple) and len(settings_result) == 2:
-        request_settings, settings_source = settings_result
-    else:
-        request_settings = settings_result
-        settings_source = 'unknown'
-        log_event(
-            "Unexpected settings response shape in load_request_settings_cache.",
-            extra={
-                "path": request.path,
-                "response_type": type(settings_result).__name__
-            },
-            level=logging.WARNING
-        )
-
-    g.request_settings = request_settings or {}
-    record_request_settings_source(settings_source)
-    return None
 
 @app.before_request
 def enforce_idle_session_timeout():
@@ -771,18 +739,49 @@ def enforce_idle_session_timeout():
     now_epoch = int(time.time())
     request_settings = get_request_settings()
     if not is_idle_timeout_enabled(request_settings):
-        session['last_activity_epoch'] = now_epoch
-        session.modified = True
+        disabled_refresh_interval_seconds = 60
+        last_activity_epoch = session.get('last_activity_epoch')
+        should_refresh_last_activity = False
+
+        if last_activity_epoch is None:
+            should_refresh_last_activity = True
+        else:
+            try:
+                parsed_last_activity_epoch = int(float(last_activity_epoch))
+                if (
+                    parsed_last_activity_epoch > now_epoch
+                    or (now_epoch - parsed_last_activity_epoch) >= disabled_refresh_interval_seconds
+                ):
+                    should_refresh_last_activity = True
+            except (TypeError, ValueError):
+                should_refresh_last_activity = True
+
+        if should_refresh_last_activity:
+            session['last_activity_epoch'] = now_epoch
+            session.modified = True
         return None
 
     idle_timeout_minutes, _ = get_idle_timeout_settings(request_settings)
     last_activity_epoch = session.get('last_activity_epoch')
     has_valid_last_activity_epoch = False
+    max_allowed_future_skew_seconds = 60
 
     if last_activity_epoch is not None:
         try:
             parsed_last_activity_epoch = int(float(last_activity_epoch))
-            has_valid_last_activity_epoch = True
+            if parsed_last_activity_epoch <= (now_epoch + max_allowed_future_skew_seconds):
+                has_valid_last_activity_epoch = True
+            else:
+                log_event(
+                    "Idle timeout last_activity_epoch is in the future; resetting timestamp.",
+                    extra={
+                        "path": request.path,
+                        "parsed_last_activity_epoch": parsed_last_activity_epoch,
+                        "now_epoch": now_epoch,
+                        "max_allowed_future_skew_seconds": max_allowed_future_skew_seconds
+                    },
+                    level=logging.WARNING
+                )
             idle_seconds = now_epoch - parsed_last_activity_epoch
             if idle_seconds >= (idle_timeout_minutes * 60):
                 user_id = session.get('user', {}).get('oid') or session.get('user', {}).get('sub')

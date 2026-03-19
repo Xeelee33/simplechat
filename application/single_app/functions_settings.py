@@ -260,7 +260,7 @@ def get_settings(use_cosmos=False, include_source=False):
         # Other
         'max_file_size_mb': 150,
         'conversation_history_limit': 10,
-        'enable_idle_timeout': True,
+        'enable_idle_timeout': False,
         'idle_timeout_minutes': 30,
         'idle_warning_minutes': 28,
         'default_system_prompt': '',
@@ -412,14 +412,26 @@ def get_settings(use_cosmos=False, include_source=False):
                     )
         #print("Successfully retrieved settings from Cosmos DB.")
 
-        original_settings_item = copy.deepcopy(settings_item)
-
         # Merge default_settings in, to fill in any missing or nested keys
-        merged = deep_merge_dicts(default_settings, settings_item)
+        merged = settings_item
+        settings_changed = deep_merge_dicts(default_settings, merged)
 
         # If merging added anything new, upsert back to Cosmos so future reads remain up to date
-        if merged != original_settings_item:
+        if settings_changed:
             cosmos_settings_container.upsert_item(merged)
+            cache_updater = getattr(app_settings_cache, "update_settings_cache", None)
+            if callable(cache_updater):
+                try:
+                    cache_updater(copy.deepcopy(merged))
+                except Exception as cache_error:
+                    log_event(
+                        "App settings cache update failed after merge upsert.",
+                        extra={
+                            "settings_source": settings_source,
+                            "error": str(cache_error)
+                        },
+                        level=logging.WARNING
+                    )
             print("App Settings had missing keys and was updated in Cosmos DB.")
             log_event(
                 "App settings missing keys were merged and persisted to Cosmos DB.",
@@ -593,15 +605,32 @@ def extract_latest_version_from_html(html_content):
         return None
     
 def deep_merge_dicts(default_dict, existing_dict):
+    """
+    Recursively merge keys from default_dict into existing_dict in place.
+    This function DOES NOT return a merged dictionary. Instead, it mutates
+    existing_dict directly, adding any keys that are missing (and, for nested
+    dict values, recursing to merge their contents as well). Non-dict values
+    in existing_dict are left as-is and are not overwritten.
+
+    Args:
+        default_dict (dict): Source of default values.
+        existing_dict (dict): Target dictionary that will be updated in place.
+        
+    Returns:
+        bool: True if existing_dict was modified at any depth, otherwise False.
+    """
+    changed = False
     for k, default_val in default_dict.items():
         if k not in existing_dict:
             existing_dict[k] = default_val
+            changed = True
         else:
             existing_val = existing_dict[k]
             if isinstance(default_val, dict) and isinstance(existing_val, dict):
-                deep_merge_dicts(default_val, existing_val)
+                if deep_merge_dicts(default_val, existing_val):
+                    changed = True
             # For lists or other types, we skip overwriting.
-    return existing_dict
+    return changed
 
 def encrypt_key(key):
     cipher_suite = Fernet(app.config['SECRET_KEY'])

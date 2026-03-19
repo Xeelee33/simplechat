@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# test_idle_logout_timeout.py
 """
 Functional test for idle session auto-logout.
 Version: 0.239.012
@@ -48,20 +49,67 @@ def _find_nested_function(parent_function, function_name):
     return None
 
 
+def _extract_constant_string_set(value_node):
+    """Extract constant string values from supported AST set expressions."""
+    if isinstance(value_node, ast.Set):
+        return {
+            element.value
+            for element in value_node.elts
+            if isinstance(element, ast.Constant) and isinstance(element.value, str)
+        }
+
+    if (
+        isinstance(value_node, ast.Call)
+        and isinstance(value_node.func, ast.Name)
+        and value_node.func.id == "set"
+        and len(value_node.args) == 1
+        and isinstance(value_node.args[0], (ast.Set, ast.List, ast.Tuple))
+    ):
+        return {
+            element.value
+            for element in value_node.args[0].elts
+            if isinstance(element, ast.Constant) and isinstance(element.value, str)
+        }
+
+    return set()
+
+
+def _get_top_level_constant_string_set(module_tree, variable_name):
+    """Return constant string values for a top-level set variable assignment."""
+    for node in module_tree.body:
+        if isinstance(node, ast.Assign):
+            has_target = any(
+                isinstance(target, ast.Name) and target.id == variable_name
+                for target in node.targets
+            )
+            if has_target:
+                return _extract_constant_string_set(node.value)
+
+        if (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == variable_name
+            and node.value is not None
+        ):
+            return _extract_constant_string_set(node.value)
+
+    return set()
+
+
 def test_server_idle_timeout_wiring():
     """Validate idle-timeout and heartbeat backend wiring exists."""
     print("🔍 Testing server-side idle-timeout wiring...")
 
-    _, app_tree = _parse_python_file("application", "single_app", "app.py")
+    app_content, app_tree = _parse_python_file("application", "single_app", "app.py")
     config_content = _read_file("application", "single_app", "config.py")
     _, auth_tree = _parse_python_file("application", "single_app", "route_frontend_authentication.py")
+    _, config_tree = _parse_python_file("application", "single_app", "config.py")
 
     required_app_functions = [
         "get_idle_timeout_settings",
         "is_idle_timeout_enabled",
         "record_request_settings_source",
         "get_request_settings",
-        "load_request_settings_cache",
         "enforce_idle_session_timeout",
         "session_heartbeat"
     ]
@@ -71,6 +119,17 @@ def test_server_idle_timeout_wiring():
     ]
     assert not missing_app_functions, f"Missing backend functions in app.py: {missing_app_functions}"
 
+    removed_app_functions = [
+        "load_request_settings_cache"
+    ]
+    unexpected_app_functions = [
+        function_name for function_name in removed_app_functions
+        if _find_top_level_function(app_tree, function_name) is not None
+    ]
+    assert not unexpected_app_functions, (
+        f"Unexpected removed backend functions in app.py: {unexpected_app_functions}"
+    )
+
     has_settings_source_counter_dict = any(
         isinstance(node, ast.Assign)
         and any(isinstance(target, ast.Name) and target.id == "settings_source_counters" for target in node.targets)
@@ -79,6 +138,21 @@ def test_server_idle_timeout_wiring():
         for node in app_tree.body
     )
     assert has_settings_source_counter_dict, "Missing settings_source_counters = {} assignment"
+
+    required_settings_source_logging_markers = [
+        "settings_source_last_observed = None",
+        "settings_source_last_non_cache_log_epoch = 0",
+        "settings_source_non_cache_log_interval_seconds = 60",
+        "should_log_non_cache_info",
+        "if should_log_non_cache_info:"
+    ]
+    missing_settings_source_logging_markers = [
+        marker for marker in required_settings_source_logging_markers
+        if marker not in app_content
+    ]
+    assert not missing_settings_source_logging_markers, (
+        f"Missing settings-source logging throttling markers: {missing_settings_source_logging_markers}"
+    )
 
     idle_settings_def = _find_top_level_function(app_tree, "get_idle_timeout_settings")
     has_idle_timeout_default_get = False
@@ -132,19 +206,11 @@ def test_server_idle_timeout_wiring():
     assert has_include_source_get_settings, "Missing get_settings(include_source=True) wiring in app.py"
     assert has_record_settings_source_call, "Missing record_request_settings_source(settings_source) wiring in app.py"
 
-    has_idle_timeout_exempt_logout_local = False
-    for node in app_tree.body:
-        if isinstance(node, ast.Assign) and any(
-            isinstance(target, ast.Name) and target.id == "IDLE_TIMEOUT_EXEMPT_PATHS"
-            for target in node.targets
-        ):
-            if isinstance(node.value, ast.Set):
-                has_idle_timeout_exempt_logout_local = any(
-                    isinstance(element, ast.Constant) and element.value == "/logout/local"
-                    for element in node.value.elts
-                )
-
-    assert has_idle_timeout_exempt_logout_local, "Missing '/logout/local' in IDLE_TIMEOUT_EXEMPT_PATHS"
+    idle_timeout_exempt_paths = _get_top_level_constant_string_set(
+        config_tree,
+        "IDLE_TIMEOUT_EXEMPT_PATHS"
+    )
+    assert "/logout/local" in idle_timeout_exempt_paths, "Missing '/logout/local' in IDLE_TIMEOUT_EXEMPT_PATHS"
 
     enforce_idle_timeout_def = _find_top_level_function(app_tree, "enforce_idle_session_timeout")
     has_is_idle_timeout_enabled_guard = False
@@ -246,8 +312,10 @@ def test_server_idle_timeout_wiring():
 
     login_def = _find_nested_function(auth_register_def, "login")
     authorized_def = _find_nested_function(auth_register_def, "authorized")
+    local_logout_def = _find_nested_function(auth_register_def, "local_logout")
     assert login_def is not None, "Missing login route function in authentication route"
     assert authorized_def is not None, "Missing authorized route function in authentication route"
+    assert local_logout_def is not None, "Missing local_logout route function in authentication route"
 
     has_last_activity_pop = False
     for node in ast.walk(login_def):
@@ -287,6 +355,33 @@ def test_server_idle_timeout_wiring():
                 has_last_activity_assignment = True
     assert has_last_activity_assignment, "Missing session['last_activity_epoch'] = int(time.time()) in authorized flow"
 
+    has_relative_index_url_for = False
+    has_external_index_url_for = False
+    for node in ast.walk(local_logout_def):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "url_for"
+            and len(node.args) == 1
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value == "index"
+        ):
+            if len(node.keywords) == 0:
+                has_relative_index_url_for = True
+
+            has_external_keyword = any(
+                isinstance(keyword, ast.keyword)
+                and keyword.arg == "_external"
+                and isinstance(keyword.value, ast.Constant)
+                and keyword.value.value is True
+                for keyword in node.keywords
+            )
+            if has_external_keyword:
+                has_external_index_url_for = True
+
+    assert has_relative_index_url_for, "Missing relative url_for('index') fallback in local_logout"
+    assert not has_external_index_url_for, "Unexpected url_for('index', _external=True) in local_logout"
+
     print("✅ Server-side idle-timeout wiring is present")
 
 
@@ -305,7 +400,8 @@ def test_base_template_warning_modal_wiring():
         "js/idle-logout-warning.js",
         "localLogoutUrl",
         "fullSsoLogoutUrl",
-        "enabled: {{ idle_timeout_enabled | default(true) | tojson }}",
+        "'enabled': idle_timeout_enabled | default(false)",
+        "| tojson | safe",
         "session_heartbeat"
     ]
 
@@ -355,7 +451,7 @@ def test_admin_idle_settings_wiring():
     admin_template_content = _read_file("application", "single_app", "templates", "admin_settings.html")
 
     required_settings_markers = [
-        "'enable_idle_timeout': True",
+        "'enable_idle_timeout': False",
         "'idle_timeout_minutes': 30",
         "'idle_warning_minutes': 28"
     ]

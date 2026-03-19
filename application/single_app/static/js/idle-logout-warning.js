@@ -53,6 +53,7 @@
         let countdownInterval = null;
         let logoutDeadlineMs = null;
         let isRefreshingSession = false;
+        let pendingUserInitiatedRefresh = false;
         let lastActivityResetAt = 0;
         let lastServerHeartbeatAt = 0;
 
@@ -130,11 +131,16 @@
 
         async function refreshServerSession(forceLogoutOnFailure, userInitiated) {
             if (isRefreshingSession) {
+                if (userInitiated) {
+                    pendingUserInitiatedRefresh = true;
+                    staySignedInButton.disabled = true;
+                }
                 return;
             }
 
             isRefreshingSession = true;
-            if (userInitiated) {
+            const isUserInitiatedRefresh = Boolean(userInitiated);
+            if (isUserInitiatedRefresh) {
                 staySignedInButton.disabled = true;
             }
 
@@ -169,7 +175,7 @@
 
                 lastServerHeartbeatAt = Date.now();
 
-                if (userInitiated) {
+                if (isUserInitiatedRefresh) {
                     hideWarningModal();
                     scheduleIdleTimers();
                 }
@@ -180,14 +186,28 @@
                 }
             } finally {
                 isRefreshingSession = false;
-                if (userInitiated) {
+                if (isUserInitiatedRefresh) {
                     staySignedInButton.disabled = false;
+                }
+
+                if (pendingUserInitiatedRefresh) {
+                    pendingUserInitiatedRefresh = false;
+                    fireAndForgetSessionRefresh(true, true);
                 }
             }
         }
 
+        function fireAndForgetSessionRefresh(forceLogoutOnFailure, userInitiated) {
+            void refreshServerSession(forceLogoutOnFailure, userInitiated).catch(function (error) {
+                console.error('Unexpected session refresh error:', error);
+                if (forceLogoutOnFailure) {
+                    logoutNow();
+                }
+            });
+        }
+
         staySignedInButton.addEventListener('click', function () {
-            refreshServerSession(true, true);
+            fireAndForgetSessionRefresh(true, true);
         });
 
         logoutNowButton.addEventListener('click', function () {
@@ -226,7 +246,7 @@
             scheduleIdleTimers();
 
             if ((now - lastServerHeartbeatAt) >= HEARTBEAT_MIN_INTERVAL_MS) {
-                refreshServerSession(false, false);
+                fireAndForgetSessionRefresh(false, false);
             }
         }
     });
