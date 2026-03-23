@@ -17,6 +17,7 @@ import time
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 DEFAULT_INDEXES = [
     "simplechat-user-index",
@@ -61,6 +62,22 @@ def parse_args() -> argparse.Namespace:
         "--dry-run",
         action="store_true",
         help="Create folder structure and manifest only; skip Azure reads.",
+    )
+    parser.add_argument(
+        "--dry-run-validate-remote",
+        action="store_true",
+        help=(
+            "When used with --dry-run, query Azure AI Search to validate index existence "
+            "and capture remote total document counts in the manifest."
+        ),
+    )
+    parser.add_argument(
+        "--audience",
+        default="",
+        help=(
+            "Optional token audience override. If omitted, audience is inferred from endpoint "
+            "(for example https://search.azure.us for Azure Government)."
+        ),
     )
     parser.add_argument(
         "--verbose",
@@ -134,10 +151,52 @@ def serialize_index(index_obj: Any) -> dict[str, Any]:
     return json.loads(json.dumps(index_obj, default=json_default))
 
 
+def resolve_search_audience(endpoint: str, audience_override: str) -> str:
+    if audience_override:
+        return audience_override.strip()
+
+    host = (urlparse(endpoint).hostname or "").lower()
+    if host.endswith(".search.azure.us"):
+        return "https://search.azure.us"
+    if host.endswith(".search.azure.cn"):
+        return "https://search.azure.cn"
+    if host.endswith(".search.microsoftazure.de"):
+        return "https://search.microsoftazure.de"
+    return "https://search.azure.com"
+
+
+def create_search_index_client(index_client_cls: Any, endpoint: str, credential: Any, audience: str, logger: logging.Logger):
+    try:
+        return index_client_cls(endpoint=endpoint, credential=credential, audience=audience)
+    except TypeError:
+        logger.warning(
+            "SearchIndexClient in this azure-search-documents version does not support 'audience'. "
+            "Falling back to default audience."
+        )
+        return index_client_cls(endpoint=endpoint, credential=credential)
+
+
+def create_search_client(search_client_cls: Any, endpoint: str, index_name: str, credential: Any, audience: str, logger: logging.Logger):
+    try:
+        return search_client_cls(
+            endpoint=endpoint,
+            index_name=index_name,
+            credential=credential,
+            audience=audience,
+        )
+    except TypeError:
+        logger.warning(
+            "SearchClient in this azure-search-documents version does not support 'audience'. "
+            "Falling back to default audience."
+        )
+        return search_client_cls(endpoint=endpoint, index_name=index_name, credential=credential)
+
+
 def backup_single_index(
     index_name: str,
     endpoint: str,
     credential: Any,
+    search_audience: str,
     index_client: Any,
     search_client_cls: Any,
     retry_exceptions: tuple[type[BaseException], ...],
@@ -165,7 +224,14 @@ def backup_single_index(
         encoding="utf-8",
     )
 
-    search_client = search_client_cls(endpoint=endpoint, index_name=index_name, credential=credential)
+    search_client = create_search_client(
+        search_client_cls=search_client_cls,
+        endpoint=endpoint,
+        index_name=index_name,
+        credential=credential,
+        audience=search_audience,
+        logger=logger,
+    )
     results = retry_call(
         lambda: search_client.search(search_text="*", include_total_count=True),
         retries=retries,
@@ -197,6 +263,59 @@ def backup_single_index(
     }
 
 
+def validate_remote_index_for_dry_run(
+    index_name: str,
+    endpoint: str,
+    credential: Any,
+    search_audience: str,
+    index_client: Any,
+    search_client_cls: Any,
+    retry_exceptions: tuple[type[BaseException], ...],
+    retries: int,
+    logger: logging.Logger,
+) -> dict[str, Any]:
+    try:
+        retry_call(
+            lambda: index_client.get_index(index_name),
+            retries=retries,
+            logger=logger,
+            operation_name=f"dry_run_get_index({index_name})",
+            retry_exceptions=retry_exceptions,
+        )
+
+        search_client = create_search_client(
+            search_client_cls=search_client_cls,
+            endpoint=endpoint,
+            index_name=index_name,
+            credential=credential,
+            audience=search_audience,
+            logger=logger,
+        )
+        results = retry_call(
+            lambda: search_client.search(search_text="*", include_total_count=True, top=0),
+            retries=retries,
+            logger=logger,
+            operation_name=f"dry_run_search_count({index_name})",
+            retry_exceptions=retry_exceptions,
+        )
+
+        remote_document_count = None
+        if hasattr(results, "get_count"):
+            remote_document_count = results.get_count()
+
+        return {
+            "remote_validation_success": True,
+            "remote_document_count": remote_document_count,
+        }
+    except Exception as error:
+        logger.error("Dry-run remote validation failed for %s: %s", index_name, error)
+        return {
+            "remote_validation_success": False,
+            "remote_document_count": None,
+            "remote_validation_error": str(error),
+        }
+
+
 def main() -> int:
     args = parse_args()
     logger = configure_logging(args.verbose)
@@ -215,6 +334,8 @@ def main() -> int:
             "max_documents": args.max_documents,
             "retries": args.retries,
             "dry_run": args.dry_run,
+            "dry_run_validate_remote": args.dry_run_validate_remote,
+            "audience": args.audience,
         },
         "results": [],
     }
@@ -222,21 +343,17 @@ def main() -> int:
     logger.info("Backup root: %s", backup_root)
     logger.info("Target indexes: %s", ", ".join(args.indexes))
 
-    if args.dry_run:
-        for index_name in args.indexes:
-            index_dir = indexes_root / index_name
-            index_dir.mkdir(parents=True, exist_ok=True)
-            manifest["results"].append(
-                {
-                    "name": index_name,
-                    "success": True,
-                    "document_count": 0,
-                    "schema_file": str(index_dir / "index-schema.json"),
-                    "documents_file": str(index_dir / "documents.jsonl"),
-                    "dry_run": True,
-                }
-            )
-    else:
+    credential = None
+    index_client = None
+    search_client_cls = None
+    retry_exceptions = ()
+    search_audience = resolve_search_audience(args.endpoint, args.audience)
+
+    manifest["settings"]["resolved_search_audience"] = search_audience
+
+    should_initialize_azure_clients = (not args.dry_run) or args.dry_run_validate_remote
+
+    if should_initialize_azure_clients:
         try:
             from azure.core.exceptions import (
                 AzureError,
@@ -249,7 +366,7 @@ def main() -> int:
             from azure.search.documents.indexes import SearchIndexClient
         except ModuleNotFoundError as error:
             logger.error(
-                "Azure SDK packages are required for non-dry-run mode. "
+                "Azure SDK packages are required for this mode. "
                 "Install azure-identity and azure-search-documents. Missing module: %s",
                 error,
             )
@@ -265,7 +382,58 @@ def main() -> int:
         )
 
         credential = DefaultAzureCredential()
-        index_client = SearchIndexClient(endpoint=args.endpoint, credential=credential)
+        index_client = create_search_index_client(
+            index_client_cls=SearchIndexClient,
+            endpoint=args.endpoint,
+            credential=credential,
+            audience=search_audience,
+            logger=logger,
+        )
+        search_client_cls = SearchClient
+
+    if args.dry_run:
+        if args.dry_run_validate_remote and (
+            credential is None
+            or index_client is None
+            or search_client_cls is None
+        ):
+            logger.error("dry-run remote validation requested but Azure clients are not initialized.")
+            return 1
+
+        for index_name in args.indexes:
+            index_dir = indexes_root / index_name
+            index_dir.mkdir(parents=True, exist_ok=True)
+            index_result = {
+                "name": index_name,
+                "success": True,
+                "document_count": 0,
+                "schema_file": str(index_dir / "index-schema.json"),
+                "documents_file": str(index_dir / "documents.jsonl"),
+                "dry_run": True,
+            }
+
+            if args.dry_run_validate_remote:
+                index_result["remote_validation_enabled"] = True
+                remote_validation = validate_remote_index_for_dry_run(
+                    index_name=index_name,
+                    endpoint=args.endpoint,
+                    credential=credential,
+                    search_audience=search_audience,
+                    index_client=index_client,
+                    search_client_cls=search_client_cls,
+                    retry_exceptions=retry_exceptions,
+                    retries=args.retries,
+                    logger=logger,
+                )
+                index_result.update(remote_validation)
+                if not remote_validation.get("remote_validation_success", False):
+                    index_result["success"] = False
+
+            manifest["results"].append(index_result)
+    else:
+        if credential is None or index_client is None or search_client_cls is None:
+            logger.error("Non-dry-run mode requires initialized Azure clients.")
+            return 1
 
         for index_name in args.indexes:
             index_dir = indexes_root / index_name
@@ -273,8 +441,9 @@ def main() -> int:
                 index_name=index_name,
                 endpoint=args.endpoint,
                 credential=credential,
+                search_audience=search_audience,
                 index_client=index_client,
-                search_client_cls=SearchClient,
+                search_client_cls=search_client_cls,
                 retry_exceptions=retry_exceptions,
                 index_output_dir=index_dir,
                 max_documents=args.max_documents,
