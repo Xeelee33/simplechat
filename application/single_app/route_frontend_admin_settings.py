@@ -10,9 +10,23 @@ from swagger_wrapper import swagger_route, get_auth_security
 from datetime import datetime, timedelta
 from admin_settings_int_utils import safe_int_with_source
 
+ALLOWED_PIL_IMAGE_UPLOAD_FORMATS = ('PNG', 'JPEG')
+
 def allowed_file(filename, allowed_extensions):
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in allowed_extensions
+
+def open_allowed_uploaded_image(file_bytes, filename):
+    img = Image.open(BytesIO(file_bytes), formats=list(ALLOWED_PIL_IMAGE_UPLOAD_FORMATS))
+    img.load()
+
+    detected_format = (img.format or '').upper()
+    if detected_format not in ALLOWED_PIL_IMAGE_UPLOAD_FORMATS:
+        raise ValueError(
+            f"Unsupported image format for {filename}. Allowed formats: {', '.join(ALLOWED_PIL_IMAGE_UPLOAD_FORMATS)}"
+        )
+
+    return img, detected_format
 
 def register_route_frontend_admin_settings(app):
     @app.route('/admin/settings', methods=['GET', 'POST'])
@@ -99,6 +113,8 @@ def register_route_frontend_admin_settings(app):
             settings['enable_text_plugin'] = False
         if 'enable_fact_memory_plugin' not in settings:
             settings['enable_fact_memory_plugin'] = False
+        if 'enable_tabular_processing_plugin' not in settings:
+            settings['enable_tabular_processing_plugin'] = False
         if 'enable_default_embedding_model_plugin' not in settings:
             settings['enable_default_embedding_model_plugin'] = False
         if 'enable_multi_agent_orchestration' not in settings:
@@ -211,6 +227,8 @@ def register_route_frontend_admin_settings(app):
             settings['idle_timeout_minutes'] = 30
         if 'idle_warning_minutes' not in settings:
             settings['idle_warning_minutes'] = 28
+        if 'idle_warning_message' not in settings:
+            settings['idle_warning_message'] = "You've been inactive for a while."
             
         if request.method == 'GET':
             # --- Model fetching logic remains the same ---
@@ -345,10 +363,16 @@ def register_route_frontend_admin_settings(app):
             max_file_size_mb = int(form_data.get('max_file_size_mb', 16))
             conversation_history_limit = int(form_data.get('conversation_history_limit', 10))
             enable_idle_timeout = form_data.get('enable_idle_timeout') == 'on'
-            idle_timeout_minutes = max(1, parse_admin_int(form_data.get('idle_timeout_minutes'), settings.get('idle_timeout_minutes', 30), 'idle_timeout_minutes', 30))
+            idle_timeout_minutes = max(10, parse_admin_int(form_data.get('idle_timeout_minutes'), settings.get('idle_timeout_minutes', 30), 'idle_timeout_minutes', 30))
             idle_warning_minutes = max(0, parse_admin_int(form_data.get('idle_warning_minutes'), settings.get('idle_warning_minutes', 28), 'idle_warning_minutes', 28))
-            if idle_warning_minutes >= idle_timeout_minutes:
-                idle_warning_minutes = max(0, idle_timeout_minutes - 1)
+            idle_warning_message = form_data.get(
+                'idle_warning_message',
+                settings.get('idle_warning_message', "You've been inactive for a while.")
+            ).strip()
+            if idle_warning_minutes > idle_timeout_minutes:
+                idle_warning_minutes = idle_timeout_minutes
+            if not idle_warning_message:
+                idle_warning_message = "You've been inactive for a while."
             # ... (fetch all other fields using form_data.get) ...
             enable_video_file_support = form_data.get('enable_video_file_support') == 'on'
             enable_audio_file_support = form_data.get('enable_audio_file_support') == 'on'
@@ -844,6 +868,7 @@ def register_route_frontend_admin_settings(app):
                 'enable_enhanced_citations': enable_enhanced_citations,
                 'enable_enhanced_citations_mount': form_data.get('enable_enhanced_citations_mount') == 'on' and enable_enhanced_citations,
                 'enhanced_citations_mount': form_data.get('enhanced_citations_mount', '/view_documents').strip(),
+                'tabular_preview_max_blob_size_mb': int(form_data.get('tabular_preview_max_blob_size_mb', 200)),
                 'office_docs_storage_account_blob_endpoint': office_docs_storage_account_blob_endpoint,
                 'office_docs_storage_account_url': office_docs_storage_account_url,
                 'office_docs_authentication_type': form_data.get('office_docs_authentication_type', 'key'),
@@ -866,9 +891,10 @@ def register_route_frontend_admin_settings(app):
                 'require_member_of_safety_violation_admin': require_member_of_safety_violation_admin, # ADDED
                 'require_member_of_feedback_admin': require_member_of_feedback_admin, # ADDED
 
-                # Feedback & Archiving
+                # Feedback, Archiving & Thoughts
                 'enable_user_feedback': form_data.get('enable_user_feedback') == 'on',
                 'enable_conversation_archiving': form_data.get('enable_conversation_archiving') == 'on',
+                'enable_thoughts': form_data.get('enable_thoughts') == 'on',
 
                 # Search (Web Search via Azure AI Foundry agent)
                 'enable_web_search': enable_web_search,
@@ -928,6 +954,7 @@ def register_route_frontend_admin_settings(app):
                 'enable_idle_timeout': enable_idle_timeout,
                 'idle_timeout_minutes': idle_timeout_minutes,
                 'idle_warning_minutes': idle_warning_minutes,
+                'idle_warning_message': idle_warning_message,
                 'default_system_prompt': form_data.get('default_system_prompt', '').strip(),
                 'access_denied_message': form_data.get('access_denied_message', settings.get('access_denied_message', '')).strip(),
 
@@ -999,13 +1026,12 @@ def register_route_frontend_admin_settings(app):
                     )
 
                     # 3) Load into Pillow from the original bytes for processing
-                    in_memory_for_process = BytesIO(file_bytes) # Use original bytes
-                    img = Image.open(in_memory_for_process)
+                    img, detected_format = open_allowed_uploaded_image(file_bytes, logo_file.filename)
                     
                     add_file_task_to_file_processing_log(
                         document_id='Image_Upload', # Placeholder if needed
                         user_id='New_image',
-                        content=f"Loaded image for processing: {logo_file.filename}"
+                        content=f"Loaded image for processing: {logo_file.filename} (format: {detected_format})"
                     )
 
                     # Ensure image mode is compatible (e.g., convert palette modes)
@@ -1082,13 +1108,12 @@ def register_route_frontend_admin_settings(app):
                     )
 
                     # 2) Load into Pillow from the original bytes for processing
-                    in_memory_for_process = BytesIO(file_bytes) # Use original bytes
-                    img = Image.open(in_memory_for_process)
+                    img, detected_format = open_allowed_uploaded_image(file_bytes, logo_dark_file.filename)
                     
                     add_file_task_to_file_processing_log(
                         document_id='Image_Upload', # Placeholder if needed
                         user_id='New_image',
-                        content=f"Loaded dark mode logo image for processing: {logo_dark_file.filename}"
+                        content=f"Loaded dark mode logo image for processing: {logo_dark_file.filename} (format: {detected_format})"
                     )
 
                     # 3) Ensure image mode is compatible (e.g., convert palette modes)
@@ -1164,13 +1189,12 @@ def register_route_frontend_admin_settings(app):
                     )
 
                     # 2) Load into Pillow from the original bytes for processing
-                    in_memory_for_process = BytesIO(file_bytes) # Use original bytes
-                    img = Image.open(in_memory_for_process)
+                    img, detected_format = open_allowed_uploaded_image(file_bytes, favicon_file.filename)
                     
                     add_file_task_to_file_processing_log(
                         document_id='Image_Upload', # Placeholder if needed
                         user_id='New_image',
-                        content=f"Loaded favicon image for processing: {favicon_file.filename}"
+                        content=f"Loaded favicon image for processing: {favicon_file.filename} (format: {detected_format})"
                     )
 
                     # 3) Ensure image mode is compatible (e.g., convert palette modes)
