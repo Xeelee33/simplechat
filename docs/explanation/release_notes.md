@@ -2,6 +2,30 @@
 
 # Feature Release
 
+### **(v0.240.006)**
+
+#### New Features
+
+*   **Azure AI Search Backup Resume Checkpoints**
+    *   Added local checkpoint-based resume support for interrupted Azure AI Search backups using `--resume` and `--backup-id`.
+    *   Added per-index `backup-state.json` tracking for continuation token and exported document count so retries continue from the last saved page instead of restarting the full index export.
+    *   Added guardrails requiring `--backup-id` with `--resume` and documenting current local-first scope for resume behavior.
+    *   (Ref: `scripts/backup_ai_search_indexes.py`, `functional_tests/test_ai_search_backup_script_scaffold.py`, `docs/explanation/features/AZURE_AI_SEARCH_BACKUP_STRATEGY.md`, `application/single_app/config.py`)
+
+### **(v0.240.005)**
+
+#### New Features
+
+*   **Azure AI Search Backup Direct-to-Blob Mode**
+    *   Added a new `--write-direct-to-blob` mode to write `index-schema.json`, `documents.jsonl`, and `manifest.json` directly to Azure Blob Storage without persisting per-index backup files to local disk.
+    *   Added guardrails for direct mode (`--blob-container-url` required, not supported with `--dry-run`) and preserved existing local-first backup behavior as the default path.
+    *   (Ref: `scripts/backup_ai_search_indexes.py`, `functional_tests/test_ai_search_backup_script_scaffold.py`, `docs/explanation/features/AZURE_AI_SEARCH_BACKUP_STRATEGY.md`, `application/single_app/config.py`)
+
+*   **Azure AI Search Backup Blob Upload Enhancements**
+    *   Added blob upload command options for local-first backups (`--upload-to-blob`, `--blob-container-url`, `--blob-prefix`) with managed-identity authentication through `DefaultAzureCredential`.
+    *   Extended backup strategy documentation and scaffold validation coverage for blob upload and direct-to-blob modes.
+    *   (Ref: `scripts/backup_ai_search_indexes.py`, `functional_tests/test_ai_search_backup_script_scaffold.py`, `docs/explanation/features/AZURE_AI_SEARCH_BACKUP_STRATEGY.md`, `application/single_app/config.py`)
+
 ### **(v0.240.003)**
 
 #### New Features

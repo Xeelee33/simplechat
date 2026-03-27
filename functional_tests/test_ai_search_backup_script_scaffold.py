@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Functional test for Azure AI Search backup script scaffold.
-Version: 0.239.013
-Implemented in: 0.239.013
+Version: 0.240.007
+Implemented in: 0.240.007
 
 This test ensures that the backup script dry-run mode creates the expected
 backup folder structure and manifest without requiring Azure connectivity.
@@ -95,6 +95,63 @@ def test_backup_script_dry_run_scaffold():
         return True
 
 
+def test_backup_script_blob_upload_flags_present():
+    """Validate blob-upload CLI flags are present in backup script."""
+    print("🔍 Testing Azure AI Search backup script blob upload CLI flags...")
+
+    script_path = os.path.abspath(
+        os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "..",
+            "scripts",
+            "backup_ai_search_indexes.py",
+        )
+    )
+
+    if not os.path.exists(script_path):
+        print(f"❌ Backup script not found: {script_path}")
+        return False
+
+    with open(script_path, "r", encoding="utf-8") as script_file:
+        script_content = script_file.read()
+
+    required_markers = [
+        '"--upload-to-blob"',
+        '"--blob-container-url"',
+        '"--blob-prefix"',
+        '"--resume"',
+        '"--backup-id"',
+        '"--write-direct-to-blob"',
+        'from azure.storage.blob import ContainerClient',
+        'def upload_backup_to_blob(',
+        'def backup_single_index_direct_to_blob(',
+        'def upload_manifest_to_blob(',
+        'build_blob_upload_root(',
+        'def load_local_resume_state(',
+        'def save_local_resume_state(',
+        'def load_blob_resume_state(',
+        'def save_blob_resume_state(',
+        'create_append_blob',
+        'append_block',
+        'resume=args.resume',
+        'backup-state.json',
+        '--resume requires --backup-id',
+    ]
+
+    missing_markers = [marker for marker in required_markers if marker not in script_content]
+    if missing_markers:
+        print(f"❌ Missing blob upload markers: {missing_markers}")
+        return False
+
+    print("✅ Blob upload CLI flags test passed")
+    return True
+
+
 if __name__ == "__main__":
-    success = test_backup_script_dry_run_scaffold()
+    tests = [
+        test_backup_script_dry_run_scaffold,
+        test_backup_script_blob_upload_flags_present,
+    ]
+    results = [test() for test in tests]
+    success = all(results)
     sys.exit(0 if success else 1)

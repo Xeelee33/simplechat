@@ -80,6 +80,45 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--upload-to-blob",
+        action="store_true",
+        help="Upload the completed backup folder to Azure Blob Storage.",
+    )
+    parser.add_argument(
+        "--blob-container-url",
+        default="",
+        help=(
+            "Blob container URL for uploads, for example "
+            "https://myaccount.blob.core.windows.net/ai-search-backups"
+        ),
+    )
+    parser.add_argument(
+        "--blob-prefix",
+        default="",
+        help="Optional blob path prefix (for example simplechat/prod).",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume a previously interrupted local backup using checkpoint state files.",
+    )
+    parser.add_argument(
+        "--backup-id",
+        default="",
+        help=(
+            "Optional backup id override. Required with --resume so the script can target "
+            "the existing backup folder."
+        ),
+    )
+    parser.add_argument(
+        "--write-direct-to-blob",
+        action="store_true",
+        help=(
+            "Write backup artifacts directly to Azure Blob Storage without saving "
+            "index files locally. Requires --blob-container-url."
+        ),
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable debug logging.",
@@ -203,6 +242,7 @@ def backup_single_index(
     index_output_dir: Path,
     max_documents: int,
     retries: int,
+    resume: bool,
     logger: logging.Logger,
 ) -> dict[str, Any]:
     logger.info("Backing up index: %s", index_name)
@@ -210,6 +250,23 @@ def backup_single_index(
 
     schema_path = index_output_dir / "index-schema.json"
     documents_path = index_output_dir / "documents.jsonl"
+    state_path = index_output_dir / "backup-state.json"
+
+    resume_state = load_local_resume_state(state_path) if resume else None
+    if resume and resume_state and resume_state.get("completed"):
+        logger.info("Index %s already completed in resume state. Skipping.", index_name)
+        return {
+            "name": index_name,
+            "success": True,
+            "document_count": int(resume_state.get("document_count", 0)),
+            "schema_file": str(schema_path),
+            "documents_file": str(documents_path),
+            "resumed": True,
+            "skipped_completed": True,
+        }
+
+    continuation_token = resume_state.get("continuation_token") if resume_state else None
+    document_count = int(resume_state.get("document_count", 0)) if resume_state else 0
 
     search_index = retry_call(
         lambda: index_client.get_index(index_name),
@@ -240,18 +297,57 @@ def backup_single_index(
         retry_exceptions=retry_exceptions,
     )
 
-    document_count = 0
-    with documents_path.open("w", encoding="utf-8") as documents_file:
-        for doc in results:
-            documents_file.write(json.dumps(doc, ensure_ascii=False, default=json_default) + "\n")
-            document_count += 1
+    write_mode = "a" if resume and documents_path.exists() else "w"
+    with documents_path.open(write_mode, encoding="utf-8") as documents_file:
+        page_iterator = results.by_page(continuation_token=continuation_token)
+        for page in page_iterator:
+            for doc in page:
+                documents_file.write(json.dumps(doc, ensure_ascii=False, default=json_default) + "\n")
+                document_count += 1
+                if max_documents > 0 and document_count >= max_documents:
+                    logger.info(
+                        "Reached max-documents limit (%s) for %s",
+                        max_documents,
+                        index_name,
+                    )
+                    continuation_token = None
+                    break
+
             if max_documents > 0 and document_count >= max_documents:
-                logger.info(
-                    "Reached max-documents limit (%s) for %s",
-                    max_documents,
-                    index_name,
+                save_local_resume_state(
+                    state_path,
+                    {
+                        "index_name": index_name,
+                        "document_count": document_count,
+                        "continuation_token": None,
+                        "completed": True,
+                    },
                 )
                 break
+
+            continuation_token = resolve_page_continuation_token(page_iterator, page)
+            save_local_resume_state(
+                state_path,
+                {
+                    "index_name": index_name,
+                    "document_count": document_count,
+                    "continuation_token": continuation_token,
+                    "completed": continuation_token is None,
+                },
+            )
+
+            if continuation_token is None:
+                break
+
+    save_local_resume_state(
+        state_path,
+        {
+            "index_name": index_name,
+            "document_count": document_count,
+            "continuation_token": None,
+            "completed": True,
+        },
+    )
 
     logger.info("Finished %s (documents exported: %s)", index_name, document_count)
     return {
@@ -260,6 +356,8 @@ def backup_single_index(
         "document_count": document_count,
         "schema_file": str(schema_path),
         "documents_file": str(documents_path),
+        "resumed": bool(resume and resume_state),
+        "resume_state_file": str(state_path),
     }
 
 
@@ -316,14 +414,294 @@ def validate_remote_index_for_dry_run(
         }
 
 
+def upload_backup_to_blob(
+    backup_root: Path,
+    backup_id: str,
+    blob_container_url: str,
+    blob_prefix: str,
+    credential: Any,
+    container_client_cls: Any,
+    logger: logging.Logger,
+) -> dict[str, Any]:
+    container_client = container_client_cls.from_container_url(
+        container_url=blob_container_url,
+        credential=credential,
+    )
+
+    normalized_prefix = blob_prefix.strip("/")
+    upload_root = f"{normalized_prefix}/{backup_id}" if normalized_prefix else backup_id
+
+    uploaded_files = 0
+    uploaded_bytes = 0
+
+    for file_path in sorted(backup_root.rglob("*")):
+        if not file_path.is_file():
+            continue
+
+        relative_path = file_path.relative_to(backup_root).as_posix()
+        blob_name = f"{upload_root}/{relative_path}"
+        with file_path.open("rb") as file_stream:
+            container_client.upload_blob(name=blob_name, data=file_stream, overwrite=True)
+
+        uploaded_files += 1
+        uploaded_bytes += file_path.stat().st_size
+
+    logger.info(
+        "Uploaded %s backup files (%s bytes) to blob container path: %s",
+        uploaded_files,
+        uploaded_bytes,
+        upload_root,
+    )
+
+    return {
+        "container_url": blob_container_url,
+        "upload_root": upload_root,
+        "uploaded_files": uploaded_files,
+        "uploaded_bytes": uploaded_bytes,
+    }
+
+
+def build_blob_upload_root(blob_prefix: str, backup_id: str) -> str:
+    normalized_prefix = blob_prefix.strip("/")
+    return f"{normalized_prefix}/{backup_id}" if normalized_prefix else backup_id
+
+
+def build_blob_url(blob_container_url: str, blob_name: str) -> str:
+    return f"{blob_container_url.rstrip('/')}/{blob_name}"
+
+
+def create_container_client(container_client_cls: Any, blob_container_url: str, credential: Any) -> Any:
+    return container_client_cls.from_container_url(
+        container_url=blob_container_url,
+        credential=credential,
+    )
+
+
+def upload_manifest_to_blob(
+    manifest: dict[str, Any],
+    blob_container_url: str,
+    upload_root: str,
+    container_client: Any,
+) -> str:
+    manifest_blob_name = f"{upload_root}/manifest.json"
+    manifest_payload = json.dumps(manifest, indent=2, ensure_ascii=False, default=json_default)
+    container_client.upload_blob(
+        name=manifest_blob_name,
+        data=manifest_payload.encode("utf-8"),
+        overwrite=True,
+    )
+    return build_blob_url(blob_container_url, manifest_blob_name)
+
+
+def load_local_resume_state(state_path: Path) -> dict[str, Any] | None:
+    if not state_path.exists():
+        return None
+    try:
+        return json.loads(state_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def save_local_resume_state(state_path: Path, state_payload: dict[str, Any]) -> None:
+    state_path.write_text(
+        json.dumps(state_payload, indent=2, ensure_ascii=False, default=json_default),
+        encoding="utf-8",
+    )
+
+
+def load_blob_resume_state(container_client: Any, state_blob_name: str) -> dict[str, Any] | None:
+    blob_client = container_client.get_blob_client(state_blob_name)
+    try:
+        if not blob_client.exists():
+            return None
+        payload = blob_client.download_blob().readall().decode("utf-8")
+        return json.loads(payload)
+    except Exception:
+        return None
+
+
+def save_blob_resume_state(container_client: Any, state_blob_name: str, state_payload: dict[str, Any]) -> None:
+    blob_client = container_client.get_blob_client(state_blob_name)
+    blob_client.upload_blob(
+        data=json.dumps(state_payload, indent=2, ensure_ascii=False, default=json_default).encode("utf-8"),
+        overwrite=True,
+    )
+
+
+def resolve_page_continuation_token(page_iterator: Any, page_object: Any) -> Any:
+    page_token = getattr(page_object, "continuation_token", None)
+    if page_token:
+        return page_token
+    return getattr(page_iterator, "continuation_token", None)
+
+
+def backup_single_index_direct_to_blob(
+    index_name: str,
+    endpoint: str,
+    credential: Any,
+    search_audience: str,
+    index_client: Any,
+    search_client_cls: Any,
+    retry_exceptions: tuple[type[BaseException], ...],
+    container_client: Any,
+    blob_container_url: str,
+    upload_root: str,
+    max_documents: int,
+    retries: int,
+    resume: bool,
+    logger: logging.Logger,
+) -> dict[str, Any]:
+    logger.info("Backing up index directly to blob: %s", index_name)
+
+    schema_blob_name = f"{upload_root}/indexes/{index_name}/index-schema.json"
+    documents_blob_name = f"{upload_root}/indexes/{index_name}/documents.jsonl"
+    state_blob_name = f"{upload_root}/indexes/{index_name}/backup-state.json"
+
+    resume_state = load_blob_resume_state(container_client, state_blob_name) if resume else None
+    if resume and resume_state and resume_state.get("completed"):
+        logger.info("Index %s already completed in blob resume state. Skipping.", index_name)
+        return {
+            "name": index_name,
+            "success": True,
+            "document_count": int(resume_state.get("document_count", 0)),
+            "schema_file": build_blob_url(blob_container_url, schema_blob_name),
+            "documents_file": build_blob_url(blob_container_url, documents_blob_name),
+            "direct_to_blob": True,
+            "resumed": True,
+            "skipped_completed": True,
+            "resume_state_file": build_blob_url(blob_container_url, state_blob_name),
+        }
+
+    continuation_token = resume_state.get("continuation_token") if resume_state else None
+    document_count = int(resume_state.get("document_count", 0)) if resume_state else 0
+
+    documents_blob_client = container_client.get_blob_client(documents_blob_name)
+    if resume and resume_state:
+        if not documents_blob_client.exists():
+            logger.warning(
+                "Resume state exists for %s but documents blob is missing. Restarting index export.",
+                index_name,
+            )
+            continuation_token = None
+            document_count = 0
+            documents_blob_client.create_append_blob()
+    else:
+        if documents_blob_client.exists():
+            documents_blob_client.delete_blob()
+        documents_blob_client.create_append_blob()
+
+    search_index = retry_call(
+        lambda: index_client.get_index(index_name),
+        retries=retries,
+        logger=logger,
+        operation_name=f"get_index({index_name})",
+        retry_exceptions=retry_exceptions,
+    )
+    schema_payload = serialize_index(search_index)
+    schema_blob_bytes = json.dumps(
+        schema_payload,
+        indent=2,
+        ensure_ascii=False,
+        default=json_default,
+    ).encode("utf-8")
+    container_client.upload_blob(name=schema_blob_name, data=schema_blob_bytes, overwrite=True)
+
+    search_client = create_search_client(
+        search_client_cls=search_client_cls,
+        endpoint=endpoint,
+        index_name=index_name,
+        credential=credential,
+        audience=search_audience,
+        logger=logger,
+    )
+    results = retry_call(
+        lambda: search_client.search(search_text="*", include_total_count=True),
+        retries=retries,
+        logger=logger,
+        operation_name=f"search({index_name})",
+        retry_exceptions=retry_exceptions,
+    )
+
+    page_iterator = results.by_page(continuation_token=continuation_token)
+    for page in page_iterator:
+        buffer_lines: list[str] = []
+        for doc in page:
+            buffer_lines.append(json.dumps(doc, ensure_ascii=False, default=json_default) + "\n")
+            document_count += 1
+            if max_documents > 0 and document_count >= max_documents:
+                logger.info(
+                    "Reached max-documents limit (%s) for %s",
+                    max_documents,
+                    index_name,
+                )
+                continuation_token = None
+                break
+
+        if buffer_lines:
+            documents_blob_client.append_block("".join(buffer_lines).encode("utf-8"))
+
+        if max_documents > 0 and document_count >= max_documents:
+            save_blob_resume_state(
+                container_client,
+                state_blob_name,
+                {
+                    "index_name": index_name,
+                    "document_count": document_count,
+                    "continuation_token": None,
+                    "completed": True,
+                },
+            )
+            break
+
+        continuation_token = resolve_page_continuation_token(page_iterator, page)
+        save_blob_resume_state(
+            container_client,
+            state_blob_name,
+            {
+                "index_name": index_name,
+                "document_count": document_count,
+                "continuation_token": continuation_token,
+                "completed": continuation_token is None,
+            },
+        )
+
+        if continuation_token is None:
+            break
+
+    save_blob_resume_state(
+        container_client,
+        state_blob_name,
+        {
+            "index_name": index_name,
+            "document_count": document_count,
+            "continuation_token": None,
+            "completed": True,
+        },
+    )
+
+    logger.info("Finished %s (documents exported directly to blob: %s)", index_name, document_count)
+    return {
+        "name": index_name,
+        "success": True,
+        "document_count": document_count,
+        "schema_file": build_blob_url(blob_container_url, schema_blob_name),
+        "documents_file": build_blob_url(blob_container_url, documents_blob_name),
+        "direct_to_blob": True,
+        "resumed": bool(resume and resume_state),
+        "resume_state_file": build_blob_url(blob_container_url, state_blob_name),
+    }
+
+
 def main() -> int:
     args = parse_args()
     logger = configure_logging(args.verbose)
 
-    backup_id = utc_timestamp()
+    backup_id = args.backup_id.strip() or utc_timestamp()
     backup_root = Path(args.output_root) / backup_id
     indexes_root = backup_root / "indexes"
-    indexes_root.mkdir(parents=True, exist_ok=True)
+
+    if not args.write_direct_to_blob:
+        indexes_root.mkdir(parents=True, exist_ok=True)
 
     manifest = {
         "backup_id": backup_id,
@@ -336,6 +714,12 @@ def main() -> int:
             "dry_run": args.dry_run,
             "dry_run_validate_remote": args.dry_run_validate_remote,
             "audience": args.audience,
+            "upload_to_blob": args.upload_to_blob,
+            "blob_container_url": args.blob_container_url,
+            "blob_prefix": args.blob_prefix,
+            "resume": args.resume,
+            "backup_id": backup_id,
+            "write_direct_to_blob": args.write_direct_to_blob,
         },
         "results": [],
     }
@@ -346,12 +730,60 @@ def main() -> int:
     credential = None
     index_client = None
     search_client_cls = None
+    container_client_cls = None
+    container_client = None
     retry_exceptions = ()
     search_audience = resolve_search_audience(args.endpoint, args.audience)
 
     manifest["settings"]["resolved_search_audience"] = search_audience
 
     should_initialize_azure_clients = (not args.dry_run) or args.dry_run_validate_remote
+    should_initialize_identity = should_initialize_azure_clients or args.upload_to_blob or args.write_direct_to_blob
+
+    if (args.upload_to_blob or args.write_direct_to_blob) and not args.blob_container_url.strip():
+        logger.error("Blob upload modes require --blob-container-url.")
+        return 1
+
+    if args.resume and not args.backup_id.strip():
+        logger.error("--resume requires --backup-id.")
+        return 1
+
+    if args.write_direct_to_blob and args.dry_run:
+        logger.error("--write-direct-to-blob is not supported with --dry-run.")
+        return 1
+
+    if should_initialize_identity:
+        try:
+            from azure.identity import DefaultAzureCredential
+        except ModuleNotFoundError as error:
+            logger.error(
+                "Azure identity package is required for this mode. "
+                "Install azure-identity. Missing module: %s",
+                error,
+            )
+            return 1
+
+        credential = DefaultAzureCredential()
+
+    if args.upload_to_blob or args.write_direct_to_blob:
+        try:
+            from azure.storage.blob import ContainerClient
+        except ModuleNotFoundError as error:
+            logger.error(
+                "Azure Blob package is required for upload mode. "
+                "Install azure-storage-blob. Missing module: %s",
+                error,
+            )
+            return 1
+
+        container_client_cls = ContainerClient
+        container_client = create_container_client(
+            container_client_cls=container_client_cls,
+            blob_container_url=args.blob_container_url.strip(),
+            credential=credential,
+        )
+
+    upload_root = build_blob_upload_root(args.blob_prefix, backup_id)
 
     if should_initialize_azure_clients:
         try:
@@ -361,7 +793,6 @@ def main() -> int:
                 ServiceRequestError,
                 ServiceResponseError,
             )
-            from azure.identity import DefaultAzureCredential
             from azure.search.documents import SearchClient
             from azure.search.documents.indexes import SearchIndexClient
         except ModuleNotFoundError as error:
@@ -380,8 +811,6 @@ def main() -> int:
             OSError,
             TimeoutError,
         )
-
-        credential = DefaultAzureCredential()
         index_client = create_search_index_client(
             index_client_cls=SearchIndexClient,
             endpoint=args.endpoint,
@@ -436,34 +865,94 @@ def main() -> int:
             return 1
 
         for index_name in args.indexes:
-            index_dir = indexes_root / index_name
-            result = backup_single_index(
-                index_name=index_name,
-                endpoint=args.endpoint,
-                credential=credential,
-                search_audience=search_audience,
-                index_client=index_client,
-                search_client_cls=search_client_cls,
-                retry_exceptions=retry_exceptions,
-                index_output_dir=index_dir,
-                max_documents=args.max_documents,
-                retries=args.retries,
-                logger=logger,
-            )
+            if args.write_direct_to_blob:
+                if container_client is None:
+                    logger.error("Direct-to-blob mode requires an initialized blob container client.")
+                    return 1
+                result = backup_single_index_direct_to_blob(
+                    index_name=index_name,
+                    endpoint=args.endpoint,
+                    credential=credential,
+                    search_audience=search_audience,
+                    index_client=index_client,
+                    search_client_cls=search_client_cls,
+                    retry_exceptions=retry_exceptions,
+                    container_client=container_client,
+                    blob_container_url=args.blob_container_url.strip(),
+                    upload_root=upload_root,
+                    max_documents=args.max_documents,
+                    retries=args.retries,
+                    resume=args.resume,
+                    logger=logger,
+                )
+            else:
+                index_dir = indexes_root / index_name
+                result = backup_single_index(
+                    index_name=index_name,
+                    endpoint=args.endpoint,
+                    credential=credential,
+                    search_audience=search_audience,
+                    index_client=index_client,
+                    search_client_cls=search_client_cls,
+                    retry_exceptions=retry_exceptions,
+                    index_output_dir=index_dir,
+                    max_documents=args.max_documents,
+                    retries=args.retries,
+                    resume=args.resume,
+                    logger=logger,
+                )
             manifest["results"].append(result)
 
     manifest_path = backup_root / "manifest.json"
-    manifest_path.write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False, default=json_default),
-        encoding="utf-8",
-    )
+    manifest_path_output = str(manifest_path)
+    if args.write_direct_to_blob:
+        if container_client is None:
+            logger.error("Direct-to-blob mode requires an initialized blob container client.")
+            return 1
+        try:
+            manifest_path_output = upload_manifest_to_blob(
+                manifest=manifest,
+                blob_container_url=args.blob_container_url.strip(),
+                upload_root=upload_root,
+                container_client=container_client,
+            )
+        except Exception as error:
+            logger.error("Direct-to-blob manifest upload failed: %s", error)
+            return 1
+    else:
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False, default=json_default),
+            encoding="utf-8",
+        )
 
     failed = [item for item in manifest["results"] if not item.get("success")]
     if failed:
-        logger.error("Backup completed with failures. See manifest: %s", manifest_path)
+        logger.error("Backup completed with failures. See manifest: %s", manifest_path_output)
         return 1
 
-    logger.info("Backup completed successfully. Manifest: %s", manifest_path)
+    if args.upload_to_blob and not args.write_direct_to_blob:
+        if credential is None or container_client_cls is None:
+            logger.error("Blob upload requested but Azure Blob upload dependencies are unavailable.")
+            return 1
+        try:
+            upload_result = upload_backup_to_blob(
+                backup_root=backup_root,
+                backup_id=backup_id,
+                blob_container_url=args.blob_container_url.strip(),
+                blob_prefix=args.blob_prefix,
+                credential=credential,
+                container_client_cls=container_client_cls,
+                logger=logger,
+            )
+            logger.info(
+                "Blob upload completed: %s",
+                json.dumps(upload_result, ensure_ascii=False),
+            )
+        except Exception as error:
+            logger.error("Backup upload to blob failed: %s", error)
+            return 1
+
+    logger.info("Backup completed successfully. Manifest: %s", manifest_path_output)
     return 0
 
 

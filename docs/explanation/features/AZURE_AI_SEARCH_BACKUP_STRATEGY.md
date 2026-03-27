@@ -8,8 +8,12 @@ Implemented in version: **0.239.013**
 Enhanced in version: **0.239.014**
 Enhanced in version: **0.239.015**
 Enhanced in version: **0.239.016**
+Enhanced in version: **0.240.004**
+Enhanced in version: **0.240.005**
+Enhanced in version: **0.240.006**
+Enhanced in version: **0.240.007**
 
-Related configuration update: `application/single_app/config.py` version updated to **0.239.016**.
+Related configuration update: `application/single_app/config.py` version updated to **0.240.007**.
 
 ## Purpose
 
@@ -66,6 +70,68 @@ You can also override audience explicitly with:
 - `--audience https://search.azure.us`
 
 The generated manifest includes `resolved_search_audience` in `settings` for troubleshooting and verification.
+
+### Optional Azure Blob Upload (New in 0.240.004)
+
+The backup script now supports optional upload of completed local backup artifacts to Azure Blob Storage.
+
+New CLI options:
+
+- `--upload-to-blob`
+- `--blob-container-url`
+- `--blob-prefix`
+
+Behavior:
+
+- Backup files are still created locally first under `artifacts/ai_search_backups/<backup_id>/`.
+- When upload is enabled, all files in that backup folder are uploaded to:
+   - `<blob_prefix>/<backup_id>/...` (or `<backup_id>/...` when prefix is empty).
+- Upload uses `DefaultAzureCredential` (managed identity, Azure CLI, or environment credentials).
+
+Requirements:
+
+- `azure-storage-blob` package in the runtime.
+- Identity with write permission to the target container (for example, `Storage Blob Data Contributor`).
+
+### Direct-to-Blob Backup Mode (New in 0.240.005)
+
+The backup script now supports writing backup artifacts directly to Azure Blob Storage without writing per-index files to local disk.
+
+New CLI option:
+
+- `--write-direct-to-blob`
+
+Behavior:
+
+- Index schema and `documents.jsonl` are uploaded directly to blob paths under `<blob_prefix>/<backup_id>/indexes/<index_name>/`.
+- `manifest.json` is uploaded directly to blob at `<blob_prefix>/<backup_id>/manifest.json`.
+- Local artifact files are not created in this mode (except normal process temp/memory usage).
+
+Requirements:
+
+- `--blob-container-url` must be provided.
+- `--dry-run` cannot be combined with `--write-direct-to-blob`.
+
+### Resume Checkpoints (Enhanced in 0.240.007)
+
+The backup script now supports resume checkpoints for both local-first and direct-to-blob export modes.
+
+New CLI options:
+
+- `--resume`
+- `--backup-id`
+
+Behavior:
+
+- During local export, each index writes a `backup-state.json` checkpoint file that tracks document count and page continuation token.
+- If a run is interrupted, rerunning with the same `--backup-id` and `--resume` continues from the last saved checkpoint for each index.
+- Completed indexes are skipped automatically when checkpoint state indicates completion.
+- During direct-to-blob export, each index writes `backup-state.json` to blob and appends document pages to an append blob so interrupted runs can continue from the saved continuation token.
+
+Requirements / limits:
+
+- `--resume` requires `--backup-id`.
+- `--write-direct-to-blob` still cannot be combined with `--dry-run`.
 
 ### Restore Automation
 
@@ -135,6 +201,22 @@ Example backup run:
 
 `py -3 scripts/backup_ai_search_indexes.py --endpoint https://<service>.search.azure.us --output-root artifacts/ai_search_backups`
 
+Example backup + blob upload:
+
+`python scripts/backup_ai_search_indexes.py --endpoint https://ai-search-oigchat-sbx.search.azure.us --output-root artifacts/ai_search_backups --upload-to-blob --blob-container-url https://stasbxaisearchbackup.blob.core.usgovcloudapi.net/ai-search-backups --blob-prefix simplechat/dev`
+
+Example direct-to-blob backup (no local index files):
+
+`python scripts/backup_ai_search_indexes.py --endpoint https://ai-search-oigchat-sbx.search.azure.us --write-direct-to-blob --blob-container-url https://stasbxaisearchbackup.blob.core.usgovcloudapi.net/ai-search-backups --blob-prefix simplechat/dev`
+
+Example resume of interrupted local backup:
+
+`python scripts/backup_ai_search_indexes.py --endpoint https://ai-search-oigchat-sbx.search.azure.us --output-root artifacts/ai_search_backups --backup-id 20260325T182513Z --resume`
+
+Example resume of interrupted direct-to-blob backup:
+
+`python scripts/backup_ai_search_indexes.py --endpoint https://ai-search-oigchat-sbx.search.azure.us --write-direct-to-blob --blob-container-url https://stasbxaisearchbackup.blob.core.usgovcloudapi.net/ai-search-backups --blob-prefix simplechat/dev --backup-id 20260325T182513Z --resume`
+
 ### Run Restore Script
 
 Example dry run:
@@ -161,6 +243,10 @@ Example restore run:
 - Test verifies dry-run scaffolding and manifest generation without requiring Azure connectivity.
 - 0.239.015 enhancement validated by script compile check and runtime functional test suite execution.
 - 0.239.016 enhancement validated by script compile check and runtime functional test suite execution.
+- 0.240.004 enhancement validated by script compile check and updated backup scaffold functional tests.
+- 0.240.005 enhancement validated by script compile check and updated backup scaffold functional tests.
+- 0.240.006 enhancement validated by script compile check and updated backup scaffold functional tests.
+- 0.240.007 enhancement validated by script compile check and updated backup scaffold functional tests.
 
 ## Troubleshooting
 
