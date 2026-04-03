@@ -6,7 +6,7 @@ import json
 from flask import Blueprint, jsonify, request, current_app
 from semantic_kernel_plugins.plugin_loader import get_all_plugin_metadata
 from semantic_kernel_plugins.plugin_health_checker import PluginHealthChecker, PluginErrorRecovery
-from functions_settings import get_settings, update_settings
+from functions_settings import get_settings, is_tabular_processing_enabled, update_settings
 from functions_authentication import *
 from functions_appinsights import log_event
 from swagger_wrapper import swagger_route, get_auth_security
@@ -37,7 +37,7 @@ from functions_keyvault import (
 #from functions_personal_actions import delete_personal_action
 
 from functions_debug import debug_print
-from json_schema_validation import validate_plugin
+from json_schema_validation import PLUGIN_STORAGE_MANAGED_FIELDS, validate_plugin
 from functions_activity_logging import (
     log_action_creation,
     log_action_update,
@@ -336,61 +336,63 @@ def set_user_plugins():
     for plugin in plugins:
         if plugin.get('name', '').lower() in global_plugin_names:
             continue  # Skip global plugins
+        plugin_to_save = dict(plugin)
         # Remove is_global if present
-        if 'is_global' in plugin:
-            del plugin['is_global']
+        if 'is_global' in plugin_to_save:
+            del plugin_to_save['is_global']
         
         # Ensure required fields have default values
-        plugin.setdefault('name', '')
-        plugin.setdefault('displayName', plugin.get('name', ''))
-        plugin.setdefault('description', '')
-        plugin.setdefault('metadata', {})
-        plugin.setdefault('additionalFields', {})
+        plugin_to_save.setdefault('name', '')
+        plugin_to_save.setdefault('displayName', plugin_to_save.get('name', ''))
+        plugin_to_save.setdefault('description', '')
+        plugin_to_save.setdefault('metadata', {})
+        plugin_to_save.setdefault('additionalFields', {})
         
-        # Remove Cosmos DB system fields that are not part of the plugin schema
-        cosmos_fields = ['_attachments', '_etag', '_rid', '_self', '_ts', 'created_at', 'updated_at', 'user_id', 'last_updated']
-        for field in cosmos_fields:
-            if field in plugin:
-                del plugin[field]
+        # Remove storage-managed fields that are not part of the plugin manifest schema,
+        # but preserve the action ID so existing records can be updated in place.
+        for field in PLUGIN_STORAGE_MANAGED_FIELDS:
+            if field == 'id':
+                continue
+            plugin_to_save.pop(field, None)
         
         # Handle endpoint based on plugin type
-        plugin_type = plugin.get('type', '')
+        plugin_type = plugin_to_save.get('type', '')
         if plugin_type in ['sql_schema', 'sql_query']:
             # SQL plugins don't use endpoints, but schema validation requires one
             # Use a placeholder that indicates it's a SQL plugin
-            plugin.setdefault('endpoint', f'sql://{plugin_type}')
+            plugin_to_save.setdefault('endpoint', f'sql://{plugin_type}')
         elif plugin_type == 'msgraph':
             # MS Graph plugin does not require an endpoint, but schema validation requires one
             #TODO: Update to support different clouds
-            plugin.setdefault('endpoint', 'https://graph.microsoft.com')
+            plugin_to_save.setdefault('endpoint', 'https://graph.microsoft.com')
         else:
             # For other plugin types, require a real endpoint
-            plugin.setdefault('endpoint', '')
+            plugin_to_save.setdefault('endpoint', '')
         
         # Ensure auth has default structure
-        if 'auth' not in plugin:
-            plugin['auth'] = {'type': 'identity'}
-        elif not isinstance(plugin['auth'], dict):
-            plugin['auth'] = {'type': 'identity'}
-        elif 'type' not in plugin['auth']:
-            plugin['auth']['type'] = 'identity'
+        if 'auth' not in plugin_to_save:
+            plugin_to_save['auth'] = {'type': 'identity'}
+        elif not isinstance(plugin_to_save['auth'], dict):
+            plugin_to_save['auth'] = {'type': 'identity'}
+        elif 'type' not in plugin_to_save['auth']:
+            plugin_to_save['auth']['type'] = 'identity'
         
         # Auto-fill type from metadata if missing or empty
-        if not plugin.get('type'):
-            if plugin.get('metadata', {}).get('type'):
-                plugin['type'] = plugin['metadata']['type']
+        if not plugin_to_save.get('type'):
+            if plugin_to_save.get('metadata', {}).get('type'):
+                plugin_to_save['type'] = plugin_to_save['metadata']['type']
             else:
-                plugin['type'] = 'unknown'  # Default type
+                plugin_to_save['type'] = 'unknown'  # Default type
         
-        debug_print(f"Plugin build: {_redact_plugin_for_logging(plugin)}")
-        validation_error = validate_plugin(plugin)
+        debug_print(f"Plugin build: {_redact_plugin_for_logging(plugin_to_save)}")
+        validation_error = validate_plugin(plugin_to_save)
         if validation_error:
             return jsonify({'error': f'Plugin validation failed: {validation_error}'}), 400
         
-        filtered_plugins.append(plugin)
-        new_plugin_names.add(plugin['name'])
-        if plugin.get('id'):
-            new_plugin_ids.add(plugin['id'])
+        filtered_plugins.append(plugin_to_save)
+        new_plugin_names.add(plugin_to_save['name'])
+        if plugin_to_save.get('id'):
+            new_plugin_ids.add(plugin_to_save['id'])
     
     # Save each plugin to the personal_actions container
     plugins_to_delete = []
@@ -690,7 +692,7 @@ def get_core_plugin_settings():
         'enable_text_plugin': bool(settings.get('enable_text_plugin', True)),
         'enable_default_embedding_model_plugin': bool(settings.get('enable_default_embedding_model_plugin', True)),
         'enable_fact_memory_plugin': bool(settings.get('enable_fact_memory_plugin', True)),
-        'enable_tabular_processing_plugin': bool(settings.get('enable_tabular_processing_plugin', False)),
+        'enable_tabular_processing_plugin': is_tabular_processing_enabled(settings),
         'enable_enhanced_citations': bool(settings.get('enable_enhanced_citations', False)),
         'enable_semantic_kernel': bool(settings.get('enable_semantic_kernel', False)),
         'allow_user_plugins': bool(settings.get('allow_user_plugins', True)),
@@ -714,14 +716,14 @@ def update_core_plugin_settings():
         'enable_text_plugin',
         'enable_default_embedding_model_plugin',
         'enable_fact_memory_plugin',
-        'enable_tabular_processing_plugin',
         'allow_user_plugins',
         'allow_group_plugins'
     ]
+    deprecated_optional_keys = ['enable_tabular_processing_plugin']
     updates = {}
     # Check for unexpected keys in the data payload
     for key in data:
-        if key not in expected_keys:
+        if key not in expected_keys and key not in deprecated_optional_keys:
             return jsonify({'error': f"Unexpected field: {key}"}), 400
 
     # Validate required fields and their types
@@ -731,12 +733,10 @@ def update_core_plugin_settings():
         if not isinstance(data[key], bool):
             return jsonify({'error': f"Field '{key}' must be a boolean."}), 400
         updates[key] = data[key]
+    for key in deprecated_optional_keys:
+        if key in data and not isinstance(data[key], bool):
+            return jsonify({'error': f"Field '{key}' must be a boolean."}), 400
     logging.info("Validated plugin settings: %s", updates)
-    # Dependency: tabular processing requires enhanced citations
-    if updates.get('enable_tabular_processing_plugin', False):
-        full_settings = get_settings()
-        if not full_settings.get('enable_enhanced_citations', False):
-            return jsonify({'error': 'Tabular Processing requires Enhanced Citations to be enabled.'}), 400
     # Update settings
     success = update_settings(updates)
     if success:

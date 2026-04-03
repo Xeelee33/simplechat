@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% set multi_endpoint_notice_data = multi_endpoint_notice|default({}) %}
 {% block title %}
     Chats - {{ app_settings.app_title }}
 {% endblock %}
@@ -289,6 +290,18 @@
                 <!-- Chat messages will be dynamically loaded here -->
             </div>
 
+            {% if multi_endpoint_notice_data.enabled %}
+            <div id="multi-endpoint-notice" class="alert alert-warning d-none mx-3 mb-0" data-message="{{ multi_endpoint_notice_data.message }}">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div class="me-3">
+                        <i class="bi bi-exclamation-triangle me-2"></i>
+                        <span id="multi-endpoint-notice-text">{{ multi_endpoint_notice_data.message }}</span>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-outline-dark" id="dismiss-multi-endpoint-notice">Dismiss</button>
+                </div>
+            </div>
+            {% endif %}
+
             <div class="p-3 border-top flex-shrink-0">
                 
                       <div class="chat-toolbar mb-2">
@@ -329,7 +342,7 @@
                             <i class="bi bi-globe"></i> <span class="search-btn-text d-none d-md-inline">Web</span>
                         </button>
                         {% endif %}
-                        {% if settings.enable_user_workspace or settings.enable_group_workspaces %}
+                        {% if settings.enable_user_workspace or settings.enable_group_workspaces or settings.enable_public_workspaces %}
                         <button id="search-prompts-btn" class="btn btn-outline-secondary btn-sm search-btn" data-bs-toggle="tooltip" data-bs-placement="top" title="Select a saved prompt">
                             <i class="bi bi-lightbulb"></i> <span class="search-btn-text d-none d-md-inline">Prompts</span>
                         </button>
@@ -345,7 +358,7 @@
                     <div class="chat-toolbar-controls">
                         <!-- Prompt Selector -->
                         <div class="chat-toolbar-selectors">
-                        {% if settings.enable_user_workspace or settings.enable_group_workspaces %}
+                        {% if settings.enable_user_workspace or settings.enable_group_workspaces or settings.enable_public_workspaces %}
                         <div id="prompt-selection-container" class="chat-toolbar-selector" style="display: none;">
                             <label for="prompt-select" class="visually-hidden">Prompt</label>
                             <div class="dropdown chat-searchable-select" id="prompt-dropdown">
@@ -445,17 +458,31 @@
                                 </option>
                                 {% endfor %}
                             {% else %}
-                                {# normal direct-Azure OpenAI flow: show whatever you fetched into settings.gpt_model.selected #}
-                                {% for model in settings.gpt_model.selected %}
-                                <option
-                                    value="{{ model.deploymentName }}"
-                                    {% if loop.first %}selected{% endif %}
-                                >
-                                    {{ model.modelName }}
-                                </option>
-                                {% endfor %}
+                                {% if settings.enable_gpt_apim %}
+                                    {# when using APIM, azure_apim_gpt_deployment may be "dep1" or "dep1,dep2,…" #}
+                                    {% set raw = settings.azure_apim_gpt_deployment or "" %}
+                                    {% set apim_list = raw.split(',') %}
+                                    {% for dep in apim_list %}
+                                    {% set d = dep.strip() %}
+                                    <option value="{{ d }}" {% if loop.first %}selected{% endif %}>
+                                        {{ d }}
+                                    </option>
+                                    {% endfor %}
+                                {% else %}
+                                    {# normal direct-Azure OpenAI flow: show whatever you fetched into settings.gpt_model.selected #}
+                                    {% for model in settings.gpt_model.selected %}
+                                    <option
+                                        value="{{ model.deploymentName }}"
+                                        {% if loop.first %}selected{% endif %}
+                                    >
+                                        {{ model.modelName }}
+                                    </option>
+                                    {% endfor %}
+                                {% endif %}
                             {% endif %}
                             </select>
+                        </div>
+
                         </div>
 
                         <div class="chat-toolbar-toggles">
@@ -466,7 +493,7 @@
                             class="btn btn-outline-secondary btn-sm rounded-circle" 
                             data-bs-toggle="tooltip" 
                             data-bs-placement="top" 
-                            title="Configure reasoning effort"
+                            data-bs-title="Configure reasoning effort"
                             style="width: 38px; height: 38px; padding: 0; display: flex; align-items: center; justify-content: center;"
                         >
                             <i class="bi bi-reception-2"></i>
@@ -487,7 +514,6 @@
                         </button>
                         {% endif %}
 
-                        </div>
                         </div>
                     </div>
                 </div>
@@ -1025,6 +1051,24 @@
     </div>
 </div>
 
+<!-- Chat Tutorial Launch Button -->
+<div id="chat-tutorial-launch" class="position-fixed top-0 end-0 p-3">
+    <button
+        id="chat-tutorial-btn"
+        class="btn btn-primary btn-sm shadow"
+        type="button"
+        aria-label="Open chat walkthrough"
+        data-bs-toggle="tooltip"
+        data-bs-trigger="hover"
+        data-bs-custom-class="chat-tutorial-tooltip"
+        data-bs-placement="left"
+        data-bs-offset="0,132"
+        title="Let us walk you through getting the most out of chat"
+    >
+        <i class="bi bi-question-circle"></i>
+        <span class="tutorial-btn-label">Chat Tutorial</span>
+    </button>
+</div>
 <!-- Export Wizard Modal -->
 <div class="modal fade" id="export-wizard-modal" tabindex="-1" aria-labelledby="export-wizard-modal-label" aria-hidden="true">
     <div class="modal-dialog modal-lg modal-dialog-centered">
@@ -1089,33 +1133,39 @@
 {% block scripts %}
 <script>
     // Ensure global variables are still accessible if needed by older scripts
-    window.enableUserFeedback = "{{ enable_user_feedback }}";
-    window.activeGroupId = "{{ active_group_id }}";
-    window.activeGroupName = "{{ active_group_name }}";
-    window.activePublicWorkspaceId = "{{ active_public_workspace_id }}";
-    window.userGroups = {{ user_groups|tojson|safe }};
-    window.userVisiblePublicWorkspaces = {{ user_visible_public_workspaces|tojson|safe }};
-    window.enableEnhancedCitations = "{{ enable_enhanced_citations }}";
-    window.enable_document_classification = "{{ enable_document_classification }}";
-    window.classification_categories = JSON.parse('{{ settings.document_classification_categories|tojson(indent=None)|safe }}' || '[]');
+    window.enableUserFeedback = {{ enable_user_feedback|tojson }};
+    window.activeGroupId = {{ active_group_id|tojson }};
+    window.activeGroupName = {{ active_group_name|tojson }};
+    window.activePublicWorkspaceId = {{ active_public_workspace_id|tojson }};
+    window.userGroups = {{ user_groups|default([], true)|tojson|safe }};
+    window.userVisiblePublicWorkspaces = {{ user_visible_public_workspaces|default([], true)|tojson|safe }};
+    window.chatPromptOptions = {{ chat_prompt_options|default([], true)|tojson|safe }};
+    window.chatAgentOptions = {{ chat_agent_options|default([], true)|tojson|safe }};
+    window.chatModelOptions = {{ chat_model_options|default([], true)|tojson|safe }};
+    window.enableEnhancedCitations = {{ enable_enhanced_citations|tojson }};
+    window.enable_document_classification = {{ enable_document_classification|tojson }};
+    window.classification_categories = {{ settings.document_classification_categories|default([], true)|tojson(indent=None)|safe }};
     if (!Array.isArray(window.classification_categories)) {
         window.classification_categories = [];
     }
 
     // Current user information for message masking
     window.currentUser = {
-        id: "{{ user_id }}",
-        display_name: "{{ user_display_name }}"
+        id: {{ user_id|tojson }},
+        display_name: {{ user_display_name|tojson }}
     };
 
     // App settings for feature detection
     window.appSettings = {
-        enable_text_to_speech: {{ 'true' if app_settings.enable_text_to_speech else 'false' }},
-        enable_speech_to_text_input: {{ 'true' if app_settings.enable_speech_to_text_input else 'false' }},
-        enable_web_search_user_notice: {{ 'true' if settings.enable_web_search_user_notice else 'false' }},
-        enforce_workspace_scope_lock: {{ 'true' if settings.enforce_workspace_scope_lock else 'false' }},
-        enable_thoughts: {{ 'true' if settings.enable_thoughts else 'false' }}
+        enable_text_to_speech: {{ app_settings.enable_text_to_speech|tojson }},
+        enable_speech_to_text_input: {{ app_settings.enable_speech_to_text_input|tojson }},
+        enable_web_search_user_notice: {{ settings.enable_web_search_user_notice|tojson }},
+        enforce_workspace_scope_lock: {{ settings.enforce_workspace_scope_lock|tojson }},
+        enable_multi_model_endpoints: {{ enable_multi_model_endpoints|tojson }},
+        enable_thoughts: {{ settings.enable_thoughts|tojson }}
     };
+
+    window.multiEndpointNotice = {{ multi_endpoint_notice_data|tojson|safe }};
 
     // Layout related globals (can stay here or move entirely into chat-layout.js if preferred)
     let splitInstance = null;

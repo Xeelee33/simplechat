@@ -1,6 +1,8 @@
 <!-- BEGIN release_notes.md BLOCK -->
 
-# Feature Release
+This page tracks notable Simple Chat releases and organizes the detailed change log by version. The timeline below provides a quick visual overview of the current release progression through v0.240.001, and the per-version entries continue immediately after it.
+
+For feature-focused and fix-focused drill-downs by version, see [Features by Version](/explanation/features/) and [Fixes by Version](/explanation/fixes/).
 
 ### **(v0.240.006)**
 
@@ -48,6 +50,175 @@
 
 #### New Features
 
+*   **MultiGPT Endpoint Management**
+    *   Added multi-endpoint model management so admins can define multiple global model endpoints and users can add personal or group-scoped endpoints when those workspace features are enabled.
+    *   Personal Workspace and Group Workspace now surface dedicated model endpoint management cards, and agent/model selection can use combined global plus workspace endpoint lists instead of relying on a single shared deployment.
+    *   The endpoint workflow supports Azure OpenAI and Azure AI Foundry discovery flows, including model fetch/test operations and endpoint-based Foundry agent import.
+    *   (Ref: `route_backend_models.py`, `route_frontend_admin_settings.py`, `workspace_model_endpoints.js`, `admin_model_endpoints.js`, `workspace.html`, `group_workspaces.html`, `test_workspace_multi_endpoints.py`)
+    
+*   **Guided Chat Tutorial**
+    *   Expanded the in-app chat tutorial into a fuller guided walkthrough of the current chat experience so new users can learn the live interface in context.
+    *   The tutorial now walks through the main chat toolbar, workspace and scope controls, conversation search, advanced search, selection mode, bulk actions, export-related flows, and message-level actions such as retry, edit, feedback, thoughts, and citations.
+    *   The walkthrough also includes reliability improvements for dynamic chat UI elements, including sidebar expansion, popup alignment, and tutorial-owned surfaces for steps that depend on transient menus.
+    *   (Ref: `chat-tutorial.js`, `chats.html`, `chat-sidebar-conversations.js`, `test_chat_tutorial_selector_coverage.py`, chat tutorial walkthrough)
+
+*   **Personal Workspace Guided Tutorial**
+    *   Added a dedicated in-app tutorial for Personal Workspace so users can learn document, prompt, agent, action, and tag workflows directly inside the workspace page.
+    *   The walkthrough covers uploads, search and filters, list and grid views, document details, row actions, bulk selection flows, tag management, prompt management, agent management, and action management.
+    *   It also includes layout-aware positioning and state-restoration behavior so the overlay remains aligned while tabs, filters, menus, and collapsible sections change during the walkthrough.
+    *   (Ref: `workspace.html`, `workspace-tutorial.js`, `test_personal_workspace_tutorial_selector_coverage.py`, `test_personal_workspace_tutorial_document_flow.py`, `test_workspace_tutorial_reposition_fix.py`, `test_workspace_tutorial_layer_order_fix.py`)
+
+*   **Conversation Completion Notifications**
+    *   Added personal chat completion notifications so users who leave a conversation before the assistant finishes can still see that a response is ready.
+    *   Notification clicks deep-link back into the completed conversation, and personal conversations now show a green unread dot until the assistant response is opened.
+    *   The unread state and notification lifecycle are wired into the chat conversation list, sidebar list, and mark-read flow so the indicator clears once the conversation is actually viewed.
+    *   (Ref: conversation notifications, unread assistant responses, `route_backend_chats.py`, `route_backend_conversations.py`, `functions_notifications.py`, `functions_conversation_unread.py`, `chat-conversations.js`, `chat-sidebar-conversations.js`)
+
+*   **Background Chat Completion Away From Chat Page**
+    *   Updated streaming chat execution so assistant responses can continue running after the user leaves the chat page instead of stopping when the browser disconnects from the stream.
+    *   This keeps final assistant persistence, unread markers, and completion notifications reachable even when users navigate into Personal, Group, or other pages while a reply is still generating.
+    *   (Ref: background stream execution, `BackgroundStreamBridge`, `route_backend_chats.py`, `test_chat_stream_background_execution.py`, `test_streaming_only_chat_path.py`)
+
+*   **SimpleChat Startup and Scheduler Separation**
+    *   Added deployment guidance for local development, Azure App Service native Python startup, and container runtimes so administrators can choose between direct Gunicorn startup and optional `python app.py` handoff behavior with clear environment-variable guidance.
+    *   Extracted the scheduler-style logging timer, approval expiration, and retention loops into a shared background task module and added a dedicated `simplechat_scheduler.py` entrypoint so scheduled work can run in a separate process or job.
+    *   This allows the web app to use Gunicorn with `workers=2` without duplicating scheduler loops inside every worker process, while keeping a legacy override available for single-process environments.
+    *   (Ref: `app.py`, `background_tasks.py`, `simplechat_scheduler.py`, `SIMPLECHAT_STARTUP.md`, `test_startup_scheduler_support.py`)
+
+*   **Deployment, Setup, and Upgrade Documentation Refresh**
+    *   Expanded the deployment guidance so teams can more quickly choose between manual deployment, Azure CLI, Bicep, Terraform, and special-environment setup paths from the main setup documentation.
+    *   Added a dedicated upgrade guide for existing deployments that separates native Python App Service upgrades from container-based App Service upgrades, including when to use VS Code deployment, ZIP deploy, deployment slots, `azd deploy`, `azd provision`, or `azd up`.
+    *   Clarified developer and production runtime documentation with explicit local-development guidance, Azure production startup expectations, Gunicorn startup rules, container entrypoint behavior, and scheduler-separation recommendations.
+    *   (Ref: `setup_instructions.md`, `setup_instructions_manual.md`, `how-to/upgrade_paths.md`, `running_simplechat_azure_production.md`, `running_simplechat_locally.md`, `SIMPLECHAT_STARTUP.md`, deployment and developer documentation)
+
+*   **Chat Completion Notifications**
+    *   Added personal chat completion notifications so users who leave a streaming conversation before the assistant finishes now receive a notification when the AI response is ready.
+    *   Notification clicks deep-link directly back to the completed conversation, and personal conversations now show a green unread dot in both chat conversation lists until that response is opened.
+    *   The unread state is cleared automatically when the conversation is opened or when the user stays on the chat page through stream completion, keeping the active-view experience clean without adding heartbeat tracking.
+    *   (Ref: `route_backend_chats.py`, `route_backend_conversations.py`, `functions_notifications.py`, `functions_conversation_unread.py`, `chat-conversations.js`, `chat-sidebar-conversations.js`, `chat-streaming.js`, `test_chat_completion_notifications.py`)
+
+*   **Configurable Tabular Preview Blob Size Limit**
+    *   Added an admin-configurable maximum blob size for tabular file previews, replacing the previous hardcoded limit. Default is 200 MB.
+    *   New **Tabular Preview Limits** card in the Enhanced Citations section of Admin Settings (Citations tab) lets admins increase or decrease the limit based on their compute resources and user population.
+    *   Setting is stored as `tabular_preview_max_blob_size_mb` and accepts values from 1 to 1024 MB.
+    *   (Ref: `route_enhanced_citations.py`, `functions_settings.py`, `admin_settings.html`)
+
+*   **Tabular Preview Memory Optimization**
+    *   The `/api/enhanced_citations/tabular_preview` endpoint no longer loads entire files into a DataFrame. It now uses `nrows` limits in `pandas.read_csv`/`read_excel` to read only the rows needed for the preview, and checks blob size before downloading to reject oversized files early.
+    *   (Ref: `route_enhanced_citations.py`)
+
+*   **Persistent Conversation Summaries**
+    *   Summaries generated during conversation export are now saved to the conversation document in Cosmos DB for future reuse.
+    *   Cached summaries include `message_time_start` and `message_time_end` — when a conversation has new messages beyond the cached range, a fresh summary is generated automatically.
+    *   The conversation details modal now shows a **Summary** card at the top. If a summary exists it displays the content, generation date, and model used. If no summary exists a **Generate Summary** button with model selector lets users create one on demand.
+    *   A **Regenerate** button is available on existing summaries to force a refresh with the currently selected model.
+    *   New `POST /api/conversations/<id>/summary` endpoint accepts an optional `model_deployment` and returns the generated summary.
+    *   The `GET /api/conversations/<id>/metadata` response now includes a `summary` field.
+    *   Extracted `generate_conversation_summary()` as a shared helper used by both the export pipeline and the new API endpoint.
+    *   (Ref: `route_backend_conversation_export.py`, `route_backend_conversations.py`, `chat-conversation-details.js`, `functions_conversation_metadata.py`)
+
+*   **PDF Conversation Export**
+    *   Added PDF as a third export format option alongside JSON and Markdown, giving users a print-ready, visually styled conversation archive.
+    *   PDF output renders chat messages with colored bubbles that mirror the live chat UI: blue for user messages, gray for assistant messages, green for file messages, and amber for system messages.
+    *   Message content is converted from Markdown to HTML for rich formatting (bold, italic, code blocks, lists, tables) inside the PDF.
+    *   Full appendix structure is included (metadata, message details, references, processing thoughts, supplemental messages), matching the Markdown export layout.
+    *   Rendering uses PyMuPDF's Story API on US Letter paper with 0.5-inch margins and automatic multi-page overflow.
+    *   Works with both single-file and ZIP packaging; intro summaries are supported in PDF as well.
+    *   Frontend format step updated to a 3-column card grid with a new PDF card using the `bi-filetype-pdf` icon.
+    *   (Ref: `route_backend_conversation_export.py`, `chat-export.js`, PyMuPDF Story API, conversation export workflow)
+
+*   **Conversation Export Intro Summaries**
+    *   Added an optional AI-generated intro summary step to the conversation export workflow, so each exported chat can begin with a short abstract before the full transcript.
+    *   Summary model selection now reuses the same model list shown in the chat composer, keeping the export flow aligned with the main chat experience.
+    *   Works for both JSON and Markdown exports, including ZIP exports where each conversation keeps its own summary metadata.
+    *   (Ref: `route_backend_conversation_export.py`, `chat-export.js`, conversation export workflow)
+
+*   **Agent & Action User Tracking (created_by / modified_by)**
+    *   All agent and action documents (personal, group, and global) now include `created_by`, `created_at`, `modified_by`, and `modified_at` fields that track which user created or last modified the entity.
+    *   On updates, the original `created_by` and `created_at` values are preserved while `modified_by` and `modified_at` are refreshed with the current user and timestamp.
+    *   New optional `user_id` parameter added to `save_group_agent`, `save_global_agent`, `save_group_action`, and `save_global_action` for caller-supplied user tracking (backward-compatible, defaults to `None`).
+    *   (Ref: `functions_personal_agents.py`, `functions_group_agents.py`, `functions_global_agents.py`, `functions_personal_actions.py`, `functions_group_actions.py`, `functions_global_actions.py`)
+
+*   **Activity Logging for Agent & Action CRUD Operations**
+    *   Every create, update, and delete operation on agents and actions now generates an activity log record in the `activity_logs` Cosmos DB container and Application Insights.
+    *   Six new logging functions: `log_agent_creation`, `log_agent_update`, `log_agent_deletion`, `log_action_creation`, `log_action_update`, `log_action_deletion`.
+    *   Activity records include: `user_id`, `activity_type`, `entity_type` (agent/action), `operation` (create/update/delete), `workspace_type` (personal/group/global), and `workspace_context` (group_id when applicable).
+    *   Logging is fire-and-forget — failures never break the CRUD operation.
+    *   All personal, group, and admin routes for both agents and actions are wired up.
+    *   (Ref: `functions_activity_logging.py`, `route_backend_agents.py`, `route_backend_plugins.py`)
+
+*   **Tabular Data Analysis — SK Mini-Agent for Normal Chat**
+    *   Tabular files (CSV, XLSX, XLS, XLSM) detected in search results now trigger a lightweight Semantic Kernel mini-agent that pre-computes data analysis before the main LLM response. This brings the same analytical depth previously only available in full agent mode to every normal chat conversation.
+    *   **Automatic Detection**: When AI Search results include tabular files from any workspace (personal, group, or public) or chat-uploaded documents, the system automatically identifies them via the `TABULAR_EXTENSIONS` configuration and routes the query through the SK mini-agent pipeline.
+    *   **Unified Workspace and Chat Handling**: Tabular files are processed identically regardless of their storage location. The plugin resolves blob paths across all four container types (`user-documents`, `group-documents`, `public-documents`, `personal-chat`) with automatic fallback resolution if the primary source lookup fails. A user asking about an Excel file in their personal workspace gets the same analytical treatment as one asking about a CSV uploaded directly to a chat.
+    *   **Six Data Analysis Functions**: The `TabularProcessingPlugin` exposes `describe_tabular_file`, `aggregate_column` (sum, mean, count, min, max, median, std, nunique, value_counts), `filter_rows` (==, !=, >, <, >=, <=, contains, startswith, endswith), `query_tabular_data` (pandas query syntax), `group_by_aggregate`, and `list_tabular_files` — all registered as Semantic Kernel functions that the mini-agent orchestrates autonomously.
+    *   **Pre-Computed Results Injected as Context**: The mini-agent's computed analysis (exact numerical results, aggregations, filtered data) is injected into the main LLM's system context so it can present accurate, citation-backed answers without hallucinating numbers.
+    *   **Graceful Degradation**: If the mini-agent analysis fails for any reason, the system falls back to instructing the main LLM to use the tabular processing plugin functions directly, preserving full functionality.
+    *   **Non-Streaming and Streaming Support**: Both chat modes are supported. The mini-agent runs synchronously before the main LLM call in both paths.
+    *   **Requires Enhanced Citations**: The tabular processing plugin depends on the blob storage client initialized by the enhanced citations system. The `enable_enhanced_citations` admin setting must be enabled for tabular data analysis to activate.
+    *   (Ref: `run_tabular_sk_analysis()`, `TabularProcessingPlugin`, `collect_tabular_sk_citations()`, `TABULAR_EXTENSIONS`)
+
+*   **Tabular Tool Execution Citations**
+    *   Every tool call made by the SK mini-agent during tabular analysis is captured and surfaced as an agent citation, providing full transparency into the data analysis pipeline.
+    *   **Automatic Capture**: The existing `@plugin_function_logger` decorator on all `TabularProcessingPlugin` functions records each invocation including function name, input parameters, returned results, execution duration, and success/failure status.
+    *   **Citation Format**: Tool execution citations appear in the same "Agent Tool Execution" modal used by full agent mode, showing `tool_name` (e.g., `TabularProcessingPlugin.aggregate_column`), `function_arguments` (the exact parameters passed), and `function_result` (the computed data returned).
+    *   **End-to-End Auditability**: Users can verify exactly which aggregations, filters, or queries were run against their data, what parameters were used, and what raw results were returned — before the LLM summarized them into the final response.
+    *   (Ref: `collect_tabular_sk_citations()`, `plugin_invocation_logger.py`)
+
+*   **Assistant Citation Artifact Storage for Large Tabular Payloads**
+    *   Moved large raw tabular and tool citation payloads off the main assistant message document and into linked child artifact records so tool-heavy answers stay compact in primary chat storage.
+    *   Added helper flows in `functions_message_artifacts.py` to keep a compact citation summary on the assistant message, externalize the full raw citation payload into `assistant_artifact` records with `assistant_artifact_chunk` support for larger payloads, and rehydrate those raw payloads later for exports or deeper inspection.
+    *   Assistant messages now keep compact summaries such as tool name, reduced arguments, counts, and a few sample rows while the heavy raw citation payload is referenced through `artifact_id` and `raw_payload_externalized=True`.
+    *   Updated chat persistence to store the linked artifact records during message save, excluded those artifact records from normal chat history and conversation views, and updated export flows to stitch the preserved raw payloads back together when needed.
+    *   This reduced primary assistant message size, lowered the risk of hitting Cosmos DB per-item limits on large tabular responses, reduced heavy citation data carried through normal chat reads, and preserved the full raw evidence for export and debugging.
+    *   Additional size reductions in the same phase compacted stored citation summaries, dropped noisy tabular citation arguments such as `user_id`, `conversation_id`, and `source`, and removed the duplicate `user_message` field from assistant message documents.
+    *   (Ref: `functions_message_artifacts.py`, `route_backend_chats.py`, `route_backend_conversations.py`, `route_frontend_conversations.py`, `route_backend_conversation_export.py`, `test_assistant_citation_artifact_storage.py`, `ASSISTANT_CITATION_ARTIFACT_STORAGE_FIX.md`)
+
+*   **SK Mini-Agent Performance Optimization**
+    *   Reduced typical tabular analysis time from ~74 seconds to an estimated ~30-33 seconds (55-60% reduction) through three complementary optimizations.
+    *   **DataFrame Caching**: Per-request in-memory cache eliminates redundant blob downloads. Previously, each of the ~8 tool calls in a typical analysis downloaded and parsed the same file independently. Now the file is downloaded once and subsequent calls read from cache. Cache is automatically scoped to the request (new plugin instance per analysis) and garbage-collected afterward.
+    *   **Pre-Dispatch Schema Injection**: File schemas (columns, data types, row counts, and a 3-row preview) are pre-loaded and injected into the SK mini-agent's system prompt before execution begins. This eliminates 2 LLM round-trips that were previously spent on file discovery (`list_tabular_files`) and schema inspection (`describe_tabular_file`), allowing the model to jump directly to analysis tool calls.
+    *   **Async Plugin Functions**: All six `@kernel_function` methods converted to `async def` using `asyncio.to_thread()`. This enables Semantic Kernel's built-in `asyncio.gather()` to truly parallelize batched tool calls (e.g., 3 simultaneous `aggregate_column` calls) instead of executing them serially on the event loop.
+    *   **Batching Instructions**: The system prompt now instructs the model to batch multiple independent function calls in a single response, reducing LLM round-trips further.
+    *   (Ref: `_df_cache`, `asyncio.to_thread`, pre-dispatch schema injection in `run_tabular_sk_analysis()`)
+
+*   **SQL Test Connection Button**
+    *   Added a "Test Connection" button to the SQL Database Configuration section (Step 3) of the action wizard, allowing users to validate database connectivity before saving.
+    *   Supports all database types: SQL Server, Azure SQL (with managed identity), PostgreSQL, MySQL, and SQLite.
+    *   Shows inline success/failure alerts with a 15-second timeout cap and sanitized error messages.
+    *   New backend endpoint: `POST /api/plugins/test-sql-connection`.
+    *   (Ref: `route_backend_plugins.py`, `plugin_modal_stepper.js`, `_plugin_modal.html`)
+
+*   **Per-Message Export**
+    *   Added export and action options to the three-dots dropdown menu on individual chat messages (both AI and user messages).
+    *   **Export to Markdown**: Downloads the message as a `.md` file with a role header. Entirely client-side.
+    *   **Export to Word**: Generates a styled `.docx` document via a new backend endpoint (`POST /api/message/export-word`). Includes Markdown-to-Word formatting (headings, bold, italic, code blocks, lists) and a citations section when present.
+    *   **Use as Prompt**: Inserts the raw message content directly into the chat input box for reuse — no clipboard, one click and it's ready to edit and send.
+    *   **Open in Email**: Opens the user's default email client with the message pre-filled in the subject and body via `mailto:`.
+    *   New options appear below a divider in the dropdown, preserving existing actions (Delete, Retry, Edit, Feedback).
+    *   (Ref: `chat-message-export.js`, `chat-messages.js`, `route_backend_conversation_export.py`, per-message export)
+
+*   **Custom Azure Environment Support in Bicep Deployment**
+    *   Added `custom` as a supported `cloudEnvironment` value alongside `public` and `usgovernment`, enabling deployment to sovereign or custom Azure environments via Bicep.
+    *   New Bicep parameters for custom environments: `customBlobStorageSuffix`, `customGraphUrl`, `customIdentityUrl`, `customResourceManagerUrl`, `customCognitiveServicesScope`, and `customSearchResourceUrl`. All of these are automatically populated from `az.environment()` defaults except `customGraphUrl`, which must be explicitly provided for custom cloud environments and can be overridden as needed.
+    *   The `cloudEnvironment` parameter now defaults intelligently based on `az.environment().name`, and legacy values (`AzureCloud`, `AzureUSGovernment`) are mapped to SimpleChat's expected values (`public`, `usgovernment`).
+    *   Custom environment app settings (`CUSTOM_GRAPH_URL_VALUE`, `CUSTOM_IDENTITY_URL_VALUE`, `CUSTOM_RESOURCE_MANAGER_URL_VALUE`, etc.) are conditionally injected only when `azurePlatform == 'custom'`.
+    *   Replaced hardcoded ACR domain logic and auth issuer URLs with dynamic `az.environment()` lookups for better cross-cloud compatibility.
+    *   Fixed trailing slash handling in `AUTHORITY` URL construction in `config.py` using `rstrip('/')`.
+    *   (Ref: `deployers/bicep/main.bicep`, `deployers/bicep/modules/appService.bicep`, `config.py`, sovereign cloud support)
+
+*   **Redis Key Vault Authentication**
+    *   Added a new `key_vault` authentication type for Redis, allowing the Redis access key to be retrieved securely from Azure Key Vault at runtime rather than stored directly in settings.
+    *   Applies across all Redis usage paths: app settings cache (`app_settings_cache.py`), session management (`app.py`), and the Redis test connection flow (`route_backend_settings.py`).
+    *   Uses `retrieve_secret_direct()` from `functions_keyvault.py` to fetch the Redis key by its Key Vault secret name. Respects `key_vault_identity` for a user-assigned managed identity on the Key Vault client.
+    *   New admin setting fields: `redis_auth_type` (values: `key`, `managed_identity`, `key_vault`) and `redis_key` (used as the Key Vault secret name when `key_vault` auth type is selected).
+    *   **Files Modified**: `app_settings_cache.py`, `app.py` `configure_sessions`, `route_backend_settings.py` `_test_redis_connection`, `functions_keyvault.py` `retrieve_secret_direct`
+
+*   **Cross-Cloud Deployment Improvements**
+    *   Updated the Azure CLI, AZD, Bicep, and Terraform deployment paths to better align with the current SimpleChat runtime configuration and reduce post-deployment manual fixes.
+    *   Added optional Azure Video Indexer deployment support with cloud-aware defaults, including the correct endpoint and ARM API version handling for Azure Commercial, Azure Government, and registered custom clouds.
+    *   (Ref: `deployers/azure.yaml`, `deployers/azurecli/deploy-simplechat.ps1`, `deployers/bicep/main.bicep`, `deployers/bicep/modules/videoIndexer.bicep`, `deployers/terraform/main.tf`, `application/single_app/functions_settings.py`)
+
 *   **Idle Session Timeout Feature**
     *   Added a new idle timer that automatically clears the user session after a configurable set time and redirects to the main chat login page.
     *   Added a frontend idle warning modal that pops up after a configurable set time, but disappears if the user moves the mouse over the chat window or interacts with the app in any way.
@@ -57,7 +228,59 @@
     *   Timeout and warning inputs are grouped under a toggleable section in General > System Settings.
     *   (Ref: `application/single_app/templates/admin_settings.html`, `application/single_app/static/js/admin/admin_settings.js`, `application/single_app/route_frontend_admin_settings.py`, `application/single_app/functions_settings.py`, `application/single_app/app.py`, `application/single_app/templates/base.html`, `application/single_app/static/js/idle-logout-warning.js`, `application/single_app/config.py`, `functional_tests/test_idle_logout_timeout.py`, `application/single_app/route_frontend_authentication.py`)
 
+#### User Interface Enhancements
+
+*   **Agent Responded Thought — Seconds & Total Duration**
+    *   The "responded" thought now shows time in **seconds** instead of milliseconds, and clarifies it is the total time from the initial user message (e.g., `'gpt-5-nano' responded (16.3s from initial message)`).
+    *   A `request_start_time` is now captured at the top of both the non-streaming and streaming chat handlers, so the duration reflects the full request lifecycle — including content safety, hybrid search, and agent invocation — not just the model response time.
+    *   Applies to all three agent paths: local SK agents (non-streaming), Azure AI Foundry agents, and streaming SK agents.
+    *   (Ref: `route_backend_chats.py`, `request_start_time`, agent responded thoughts)
+
+*   **Enhanced Agent Execution Thoughts**
+    *   Added detailed model-level status messages during agent execution, giving users full visibility into each stage of the AI pipeline.
+    *   **Model Identification**: A new "Sending to '{deployment_name}'" thought appears immediately after "Sending to agent", showing the exact model deployment being used (e.g., `gpt-5-nano`).
+    *   **Generating Response**: A "Generating response..." thought now appears before the agent begins its invocation loop, matching the existing behavior for non-agent GPT calls.
+    *   **Model Responded with Duration**: A "'{deployment_name}' responded ({duration}ms)" thought appears after the agent completes, showing total wall-clock execution time.
+    *   Applies to all three agent paths: local SK agents (streaming and non-streaming) and Azure AI Foundry agents.
+    *   Uses the existing `generation` step type (lightning bolt icon) — no frontend changes required.
+    *   (Ref: `route_backend_chats.py`, `ThoughtTracker`, agent execution pipeline)
+
+*   **List/Grid View Toggle for Agents and Actions**
+    *   Added a list/grid view toggle to all four workspace areas: personal agents, personal actions, group agents, and group actions.
+    *   **Grid View**: Large cards with type icon, humanized name, truncated description, and action buttons (Chat, View, Edit, Delete as applicable).
+    *   **List View**: Improved table layout with fixed column widths (28%/47%/25%), humanized display names, and truncated descriptions with hover tooltips for full text.
+    *   **View Button**: New eye-icon button on every agent and action that opens a read-only detail modal with gradient-header summary cards (Basic Information, Model Configuration, Instructions for agents; Basic Information, Configuration for actions).
+    *   **Name Humanization**: Display names are now automatically parsed — underscores and camelCase/PascalCase boundaries are converted to properly spaced, title-cased words (e.g., `myCustomAgent` → `My Custom Agent`).
+    *   **Persistent Preference**: View mode selection (list/grid) is saved per area in localStorage and restored on page load.
+    *   New shared utility module `view-utils.js` provides reusable functions for all four workspace areas.
+    *   (Ref: `view-utils.js`, `workspace_agents.js`, `workspace_plugins.js`, `plugin_common.js`, `group_agents.js`, `group_plugins.js`, `workspace.html`, `group_workspaces.html`, `styles.css`)
+
+*   **Chat with Agent Button for Group Agents**
+    *   Added a "Chat" button to each group agent row, allowing users to quickly select a group agent and navigate to the chat page.
+    *   (Ref: `group_agents.js`, `group_workspaces.html`)
+
+*   **Hidden Deprecated Action Types**
+    *   Deprecated action types (`sql_schema`, `ui_test`, `queue_storage`, `blob_storage`, `embedding_model`) are now hidden from the action creation wizard type selector. Existing actions of these types remain functional.
+    *   (Ref: `plugin_modal_stepper.js`)
+
+*   **Advanced Settings Collapse Toggle**
+    *   Step 4 (Advanced) content is now hidden behind a collapsible toggle button ("Show Advanced Settings") instead of being displayed by default. Reduces visual noise for most users.
+    *   For SQL action types, the redundant additional fields UI in Step 4 is hidden entirely since all SQL configuration is already handled in Step 3.
+    *   Step 5 (Summary) no longer shows the raw additional fields JSON dump for SQL types, since that data is already shown in the SQL Database Configuration summary card.
+    *   (Ref: `_plugin_modal.html`, `plugin_modal_stepper.js`)
+    
 #### Bug Fixes
+
+*   **Python Runtime Dependency Refresh and Supply-Chain Hardening**
+    *   Continued the requirements hardening work from `v0.240.014` by tightening the main application runtime to exact package pins, reducing dependency drift across local development, CI, and Azure deployments to help mitigate supply-chain exposure.
+    *   Upgraded the Flask runtime stack to `Flask==3.1.3` and `Werkzeug==3.1.6`, and updated the shared `Markup` import path to `markupsafe` so the app starts correctly with Flask 3's package boundary changes.
+    *   Refreshed key runtime dependencies including `gunicorn`, `requests`, `openai`, `Markdown`, `markdown2`, `azure-ai-projects`, `azure-ai-agents`, `pyjwt`, `pypdf`, `semantic-kernel`, `protobuf`, `redis`, `pyodbc`, `PyMySQL`, `cython`, and `aiohttp` to pick up current security, compatibility, and capability improvements while keeping builds reproducible.
+    *   (Ref: `application/single_app/requirements.txt`, `application/single_app/config.py`, `functional_tests/test_flask_markup_import_fix.py`, `docs/explanation/fixes/FLASK_31_MARKUP_IMPORT_FIX.md`)
+
+*   **Dependency Pinning and Requirements Hardening**
+    *   Pinned previously floating Python package requirements to exact versions across the main app, UI test, deployer, and external app requirement files to reduce unexpected dependency drift and tighten supply-chain control.
+    *   Corrected stale external app dependency entries by replacing `dotenv` with `python-dotenv`, removing the stdlib-only `logging` package, removing an unused `Flask` requirement from the databaseseeder utility, and adding `pytest-playwright` so the UI test dependency set matches the pytest fixture usage in the test suite.
+    *   (Ref: `application/single_app/requirements.txt`, `ui_tests/requirements.txt`, `deployers/bicep/requirements.txt`, `application/external_apps/databaseseeder/requirements.txt`, `application/external_apps/bulkloader/requirements.txt`)
 
 *   **Settings Default Merge Persistence Fix**
     *   Fixed app settings merge detection in `get_settings()` where `deep_merge_dicts()` mutates the existing settings object in place, causing change detection to always evaluate as unchanged.
@@ -65,10 +288,6 @@
     *   Added a functional regression test to validate the merge detection and persistence markers.
     *   (Ref: `application/single_app/functions_settings.py`, `application/single_app/config.py`, `functional_tests/test_settings_deep_merge_persistence_fix.py`)
     
-### **(v0.240.001)**
-
-#### Bug Fixes
-
 *   **Pillow PSD Upload Hardening**
     *   Updated the application to use `pillow==12.1.1`, moving the app off the vulnerable Pillow range for specially crafted PSD image parsing.
     *   Hardened admin logo and favicon uploads so Pillow now only opens the PNG and JPEG formats already allowed by the route, preventing disguised PSD content from being decoded during upload processing.
@@ -131,6 +350,12 @@
     *   Agent payload sanitization now strips backend-managed audit and Cosmos metadata before schema validation, while preserving server-side tracking during persistence.
     *   (Ref: `functions_agent_payload.py`, `route_backend_agents.py`, agent schema validation, functional test coverage)
 
+*   **Live Tool Invocation Thoughts During Streaming**
+    *   Updated plugin thought handling so the chat can surface an immediate `Invoking Plugin.Function` thought as soon as a tool starts, instead of waiting until the tool completes.
+    *   Streaming chat now polls pending thoughts while the response is still in flight, allowing the active status badge to switch from model-sending text to the currently executing plugin call during long-running tools such as `WaitPlugin.wait`.
+    *   Completed plugin thoughts still include the richer human-readable summaries for wait, math, and generic plugin executions, and broader plugin coverage remains enabled through auto-wrapping for manifest-loaded plugins.
+    *   (Ref: `plugin_invocation_logger.py`, `plugin_invocation_thoughts.py`, `chat-thoughts.js`, `chat-streaming.js`, `logged_plugin_loader.py`, `test_logged_core_plugins.py`)
+    
 *   **Multi-Sheet Workbook Tabular Analysis**
     *   Fixed multi-sheet Excel workbooks being analyzed from the wrong worksheet during tabular chat responses. Questions that clearly target a specific tab, such as asset values in a workbook with `Assets`, `Balance`, and `Income` sheets, no longer silently default to the first sheet.
     *   Tabular runtime analysis now requires explicit `sheet_name` or `sheet_index` selection for analytical calls on multi-sheet workbooks, and the SK mini-agent preload now includes workbook sheet inventory and per-sheet schemas so the model can choose the correct worksheet before computing results.
@@ -227,220 +452,23 @@
     *   Fixed `__Secret` key suffix mismatch in additional settings schemas where `connection_string__Secret` and `password__Secret` didn't match the runtime's expected `connection_string` and `password` field names. Also removed duplicate `azuresql` enum value.
     *   (Ref: `route_backend_plugins.py`, `plugin_modal_stepper.js`, `sql_query.definition.json`, `sql_schema.definition.json`, `sql_query_plugin.additional_settings.schema.json`, `sql_schema_plugin.additional_settings.schema.json`)
 
-#### New Features
+*   **Workspace Model Endpoint Scope Gate Enforcement**
+    *   Fixed personal and group workspace model discovery and model test routes so they now enforce the same custom-endpoint feature gates as the corresponding endpoint management routes.
+    *   Restored the intended endpoint modal workflow so users can still fetch and test models before saving a new personal or group endpoint when those scope features are enabled.
+    *   Requests that reference a saved endpoint now resolve against the caller's authorized persisted endpoint configuration instead of allowing raw request payloads to override stored settings.
+    *   (Ref: `route_backend_models.py`, `workspace_model_endpoints.js`, `test_model_endpoint_scope_gate_enforcement.py`, model endpoint scope gating)
 
-*   **Conversation Completion Notifications**
-    *   Added personal chat completion notifications so users who leave a conversation before the assistant finishes can still see that a response is ready.
-    *   Notification clicks deep-link back into the completed conversation, and personal conversations now show a green unread dot until the assistant response is opened.
-    *   The unread state and notification lifecycle are wired into the chat conversation list, sidebar list, and mark-read flow so the indicator clears once the conversation is actually viewed.
-    *   (Ref: conversation notifications, unread assistant responses, `route_backend_chats.py`, `route_backend_conversations.py`, `functions_notifications.py`, `functions_conversation_unread.py`, `chat-conversations.js`, `chat-sidebar-conversations.js`)
+*   **Workspace Agent View Consistency**
+    *   Fixed personal and group workspace agent lists so table-view actions now use the same button order, making agent management behavior more predictable across both workspaces.
+    *   Fixed group workspace agent grid cards so editable group agents once again show Edit and Delete actions when the current user has permission to manage them.
+    *   Fixed personal workspace agent table layout so action buttons stay inside the table instead of overflowing past the Actions column.
+    *   (Ref: `workspace.html`, `workspace_agents.js`, `group_agents.js`, `view-utils.js`, `test_workspace_agent_views_consistency.py`)
 
-*   **Background Chat Completion Away From Chat Page**
-    *   Updated streaming chat execution so assistant responses can continue running after the user leaves the chat page instead of stopping when the browser disconnects from the stream.
-    *   This keeps final assistant persistence, unread markers, and completion notifications reachable even when users navigate into Personal, Group, or other pages while a reply is still generating.
-    *   (Ref: background stream execution, `BackgroundStreamBridge`, `route_backend_chats.py`, `test_chat_stream_background_execution.py`, `test_streaming_only_chat_path.py`)
-
-*   **SimpleChat Startup and Scheduler Separation**
-    *   Added deployment guidance for local development, Azure App Service native Python startup, and container runtimes so administrators can choose between direct Gunicorn startup and optional `python app.py` handoff behavior with clear environment-variable guidance.
-    *   Extracted the scheduler-style logging timer, approval expiration, and retention loops into a shared background task module and added a dedicated `simplechat_scheduler.py` entrypoint so scheduled work can run in a separate process or job.
-    *   This allows the web app to use Gunicorn with `workers=2` without duplicating scheduler loops inside every worker process, while keeping a legacy override available for single-process environments.
-    *   (Ref: `app.py`, `background_tasks.py`, `simplechat_scheduler.py`, `SIMPLECHAT_STARTUP.md`, `test_startup_scheduler_support.py`)
-
-*   **Chat Completion Notifications**
-    *   Added personal chat completion notifications so users who leave a streaming conversation before the assistant finishes now receive a notification when the AI response is ready.
-    *   Notification clicks deep-link directly back to the completed conversation, and personal conversations now show a green unread dot in both chat conversation lists until that response is opened.
-    *   The unread state is cleared automatically when the conversation is opened or when the user stays on the chat page through stream completion, keeping the active-view experience clean without adding heartbeat tracking.
-    *   (Ref: `route_backend_chats.py`, `route_backend_conversations.py`, `functions_notifications.py`, `functions_conversation_unread.py`, `chat-conversations.js`, `chat-sidebar-conversations.js`, `chat-streaming.js`, `test_chat_completion_notifications.py`)
-
-*   **Configurable Tabular Preview Blob Size Limit**
-    *   Added an admin-configurable maximum blob size for tabular file previews, replacing the previous hardcoded limit. Default is 200 MB.
-    *   New **Tabular Preview Limits** card in the Enhanced Citations section of Admin Settings (Citations tab) lets admins increase or decrease the limit based on their compute resources and user population.
-    *   Setting is stored as `tabular_preview_max_blob_size_mb` and accepts values from 1 to 1024 MB.
-    *   (Ref: `route_enhanced_citations.py`, `functions_settings.py`, `admin_settings.html`)
-
-*   **Tabular Preview Memory Optimization**
-    *   The `/api/enhanced_citations/tabular_preview` endpoint no longer loads entire files into a DataFrame. It now uses `nrows` limits in `pandas.read_csv`/`read_excel` to read only the rows needed for the preview, and checks blob size before downloading to reject oversized files early.
-    *   (Ref: `route_enhanced_citations.py`)
-
-*   **Persistent Conversation Summaries**
-    *   Summaries generated during conversation export are now saved to the conversation document in Cosmos DB for future reuse.
-    *   Cached summaries include `message_time_start` and `message_time_end` — when a conversation has new messages beyond the cached range, a fresh summary is generated automatically.
-    *   The conversation details modal now shows a **Summary** card at the top. If a summary exists it displays the content, generation date, and model used. If no summary exists a **Generate Summary** button with model selector lets users create one on demand.
-    *   A **Regenerate** button is available on existing summaries to force a refresh with the currently selected model.
-    *   New `POST /api/conversations/<id>/summary` endpoint accepts an optional `model_deployment` and returns the generated summary.
-    *   The `GET /api/conversations/<id>/metadata` response now includes a `summary` field.
-    *   Extracted `generate_conversation_summary()` as a shared helper used by both the export pipeline and the new API endpoint.
-    *   (Ref: `route_backend_conversation_export.py`, `route_backend_conversations.py`, `chat-conversation-details.js`, `functions_conversation_metadata.py`)
-
-*   **PDF Conversation Export**
-    *   Added PDF as a third export format option alongside JSON and Markdown, giving users a print-ready, visually styled conversation archive.
-    *   PDF output renders chat messages with colored bubbles that mirror the live chat UI: blue for user messages, gray for assistant messages, green for file messages, and amber for system messages.
-    *   Message content is converted from Markdown to HTML for rich formatting (bold, italic, code blocks, lists, tables) inside the PDF.
-    *   Full appendix structure is included (metadata, message details, references, processing thoughts, supplemental messages), matching the Markdown export layout.
-    *   Rendering uses PyMuPDF's Story API on US Letter paper with 0.5-inch margins and automatic multi-page overflow.
-    *   Works with both single-file and ZIP packaging; intro summaries are supported in PDF as well.
-    *   Frontend format step updated to a 3-column card grid with a new PDF card using the `bi-filetype-pdf` icon.
-    *   (Ref: `route_backend_conversation_export.py`, `chat-export.js`, PyMuPDF Story API, conversation export workflow)
-
-*   **Conversation Export Intro Summaries**
-    *   Added an optional AI-generated intro summary step to the conversation export workflow, so each exported chat can begin with a short abstract before the full transcript.
-    *   Summary model selection now reuses the same model list shown in the chat composer, keeping the export flow aligned with the main chat experience.
-    *   Works for both JSON and Markdown exports, including ZIP exports where each conversation keeps its own summary metadata.
-    *   (Ref: `route_backend_conversation_export.py`, `chat-export.js`, conversation export workflow)
-
-*   **Agent & Action User Tracking (created_by / modified_by)**
-    *   All agent and action documents (personal, group, and global) now include `created_by`, `created_at`, `modified_by`, and `modified_at` fields that track which user created or last modified the entity.
-    *   On updates, the original `created_by` and `created_at` values are preserved while `modified_by` and `modified_at` are refreshed with the current user and timestamp.
-    *   New optional `user_id` parameter added to `save_group_agent`, `save_global_agent`, `save_group_action`, and `save_global_action` for caller-supplied user tracking (backward-compatible, defaults to `None`).
-    *   (Ref: `functions_personal_agents.py`, `functions_group_agents.py`, `functions_global_agents.py`, `functions_personal_actions.py`, `functions_group_actions.py`, `functions_global_actions.py`)
-
-*   **Activity Logging for Agent & Action CRUD Operations**
-    *   Every create, update, and delete operation on agents and actions now generates an activity log record in the `activity_logs` Cosmos DB container and Application Insights.
-    *   Six new logging functions: `log_agent_creation`, `log_agent_update`, `log_agent_deletion`, `log_action_creation`, `log_action_update`, `log_action_deletion`.
-    *   Activity records include: `user_id`, `activity_type`, `entity_type` (agent/action), `operation` (create/update/delete), `workspace_type` (personal/group/global), and `workspace_context` (group_id when applicable).
-    *   Logging is fire-and-forget — failures never break the CRUD operation.
-    *   All personal, group, and admin routes for both agents and actions are wired up.
-    *   (Ref: `functions_activity_logging.py`, `route_backend_agents.py`, `route_backend_plugins.py`)
-
-*   **Tabular Data Analysis — SK Mini-Agent for Normal Chat**
-    *   Tabular files (CSV, XLSX, XLS, XLSM) detected in search results now trigger a lightweight Semantic Kernel mini-agent that pre-computes data analysis before the main LLM response. This brings the same analytical depth previously only available in full agent mode to every normal chat conversation.
-    *   **Automatic Detection**: When AI Search results include tabular files from any workspace (personal, group, or public) or chat-uploaded documents, the system automatically identifies them via the `TABULAR_EXTENSIONS` configuration and routes the query through the SK mini-agent pipeline.
-    *   **Unified Workspace and Chat Handling**: Tabular files are processed identically regardless of their storage location. The plugin resolves blob paths across all four container types (`user-documents`, `group-documents`, `public-documents`, `personal-chat`) with automatic fallback resolution if the primary source lookup fails. A user asking about an Excel file in their personal workspace gets the same analytical treatment as one asking about a CSV uploaded directly to a chat.
-    *   **Six Data Analysis Functions**: The `TabularProcessingPlugin` exposes `describe_tabular_file`, `aggregate_column` (sum, mean, count, min, max, median, std, nunique, value_counts), `filter_rows` (==, !=, >, <, >=, <=, contains, startswith, endswith), `query_tabular_data` (pandas query syntax), `group_by_aggregate`, and `list_tabular_files` — all registered as Semantic Kernel functions that the mini-agent orchestrates autonomously.
-    *   **Pre-Computed Results Injected as Context**: The mini-agent's computed analysis (exact numerical results, aggregations, filtered data) is injected into the main LLM's system context so it can present accurate, citation-backed answers without hallucinating numbers.
-    *   **Graceful Degradation**: If the mini-agent analysis fails for any reason, the system falls back to instructing the main LLM to use the tabular processing plugin functions directly, preserving full functionality.
-    *   **Non-Streaming and Streaming Support**: Both chat modes are supported. The mini-agent runs synchronously before the main LLM call in both paths.
-    *   **Requires Enhanced Citations**: The tabular processing plugin depends on the blob storage client initialized by the enhanced citations system. The `enable_enhanced_citations` admin setting must be enabled for tabular data analysis to activate.
-    *   (Ref: `run_tabular_sk_analysis()`, `TabularProcessingPlugin`, `collect_tabular_sk_citations()`, `TABULAR_EXTENSIONS`)
-
-*   **Tabular Tool Execution Citations**
-    *   Every tool call made by the SK mini-agent during tabular analysis is captured and surfaced as an agent citation, providing full transparency into the data analysis pipeline.
-    *   **Automatic Capture**: The existing `@plugin_function_logger` decorator on all `TabularProcessingPlugin` functions records each invocation including function name, input parameters, returned results, execution duration, and success/failure status.
-    *   **Citation Format**: Tool execution citations appear in the same "Agent Tool Execution" modal used by full agent mode, showing `tool_name` (e.g., `TabularProcessingPlugin.aggregate_column`), `function_arguments` (the exact parameters passed), and `function_result` (the computed data returned).
-    *   **End-to-End Auditability**: Users can verify exactly which aggregations, filters, or queries were run against their data, what parameters were used, and what raw results were returned — before the LLM summarized them into the final response.
-    *   (Ref: `collect_tabular_sk_citations()`, `plugin_invocation_logger.py`)
-
-*   **SK Mini-Agent Performance Optimization**
-    *   Reduced typical tabular analysis time from ~74 seconds to an estimated ~30-33 seconds (55-60% reduction) through three complementary optimizations.
-    *   **DataFrame Caching**: Per-request in-memory cache eliminates redundant blob downloads. Previously, each of the ~8 tool calls in a typical analysis downloaded and parsed the same file independently. Now the file is downloaded once and subsequent calls read from cache. Cache is automatically scoped to the request (new plugin instance per analysis) and garbage-collected afterward.
-    *   **Pre-Dispatch Schema Injection**: File schemas (columns, data types, row counts, and a 3-row preview) are pre-loaded and injected into the SK mini-agent's system prompt before execution begins. This eliminates 2 LLM round-trips that were previously spent on file discovery (`list_tabular_files`) and schema inspection (`describe_tabular_file`), allowing the model to jump directly to analysis tool calls.
-    *   **Async Plugin Functions**: All six `@kernel_function` methods converted to `async def` using `asyncio.to_thread()`. This enables Semantic Kernel's built-in `asyncio.gather()` to truly parallelize batched tool calls (e.g., 3 simultaneous `aggregate_column` calls) instead of executing them serially on the event loop.
-    *   **Batching Instructions**: The system prompt now instructs the model to batch multiple independent function calls in a single response, reducing LLM round-trips further.
-    *   (Ref: `_df_cache`, `asyncio.to_thread`, pre-dispatch schema injection in `run_tabular_sk_analysis()`)
-
-*   **SQL Test Connection Button**
-    *   Added a "Test Connection" button to the SQL Database Configuration section (Step 3) of the action wizard, allowing users to validate database connectivity before saving.
-    *   Supports all database types: SQL Server, Azure SQL (with managed identity), PostgreSQL, MySQL, and SQLite.
-    *   Shows inline success/failure alerts with a 15-second timeout cap and sanitized error messages.
-    *   New backend endpoint: `POST /api/plugins/test-sql-connection`.
-    *   (Ref: `route_backend_plugins.py`, `plugin_modal_stepper.js`, `_plugin_modal.html`)
-
-*   **Per-Message Export**
-    *   Added export and action options to the three-dots dropdown menu on individual chat messages (both AI and user messages).
-    *   **Export to Markdown**: Downloads the message as a `.md` file with a role header. Entirely client-side.
-    *   **Export to Word**: Generates a styled `.docx` document via a new backend endpoint (`POST /api/message/export-word`). Includes Markdown-to-Word formatting (headings, bold, italic, code blocks, lists) and a citations section when present.
-    *   **Use as Prompt**: Inserts the raw message content directly into the chat input box for reuse — no clipboard, one click and it's ready to edit and send.
-    *   **Open in Email**: Opens the user's default email client with the message pre-filled in the subject and body via `mailto:`.
-    *   New options appear below a divider in the dropdown, preserving existing actions (Delete, Retry, Edit, Feedback).
-    *   (Ref: `chat-message-export.js`, `chat-messages.js`, `route_backend_conversation_export.py`, per-message export)
-
-*   **Custom Azure Environment Support in Bicep Deployment**
-    *   Added `custom` as a supported `cloudEnvironment` value alongside `public` and `usgovernment`, enabling deployment to sovereign or custom Azure environments via Bicep.
-    *   New Bicep parameters for custom environments: `customBlobStorageSuffix`, `customGraphUrl`, `customIdentityUrl`, `customResourceManagerUrl`, `customCognitiveServicesScope`, and `customSearchResourceUrl`. All of these are automatically populated from `az.environment()` defaults except `customGraphUrl`, which must be explicitly provided for custom cloud environments and can be overridden as needed.
-    *   The `cloudEnvironment` parameter now defaults intelligently based on `az.environment().name`, and legacy values (`AzureCloud`, `AzureUSGovernment`) are mapped to SimpleChat's expected values (`public`, `usgovernment`).
-    *   Custom environment app settings (`CUSTOM_GRAPH_URL_VALUE`, `CUSTOM_IDENTITY_URL_VALUE`, `CUSTOM_RESOURCE_MANAGER_URL_VALUE`, etc.) are conditionally injected only when `azurePlatform == 'custom'`.
-    *   Replaced hardcoded ACR domain logic and auth issuer URLs with dynamic `az.environment()` lookups for better cross-cloud compatibility.
-    *   Fixed trailing slash handling in `AUTHORITY` URL construction in `config.py` using `rstrip('/')`.
-    *   (Ref: `deployers/bicep/main.bicep`, `deployers/bicep/modules/appService.bicep`, `config.py`, sovereign cloud support)
-
-*   **Redis Key Vault Authentication**
-    *   Added a new `key_vault` authentication type for Redis, allowing the Redis access key to be retrieved securely from Azure Key Vault at runtime rather than stored directly in settings.
-    *   Applies across all Redis usage paths: app settings cache (`app_settings_cache.py`), session management (`app.py`), and the Redis test connection flow (`route_backend_settings.py`).
-    *   Uses `retrieve_secret_direct()` from `functions_keyvault.py` to fetch the Redis key by its Key Vault secret name. Respects `key_vault_identity` for a user-assigned managed identity on the Key Vault client.
-    *   New admin setting fields: `redis_auth_type` (values: `key`, `managed_identity`, `key_vault`) and `redis_key` (used as the Key Vault secret name when `key_vault` auth type is selected).
-    *   **Files Modified**: `app_settings_cache.py`, `app.py` `configure_sessions`, `route_backend_settings.py` `_test_redis_connection`, `functions_keyvault.py` `retrieve_secret_direct`
-
-#### User Interface Enhancements
-
-*   **Key Vault Bootstrap Circular Dependency Fix**
-    *   Fixed `TypeError: 'NoneType' object is not callable` crash on startup when `redis_auth_type` is set to `key_vault`. The error occurred because `retrieve_secret_direct()` called `app_settings_cache.get_settings_cache()` while `configure_app_cache()` was still initialising, leaving `get_settings_cache` as `None`.
-    *   **Root Cause**: `app_settings_cache.configure_app_cache()` calls `retrieve_secret_direct()` before `get_settings_cache` is assigned. Both `retrieve_secret_direct()` and `get_keyvault_credential()` attempted to resolve settings via the cache at call time.
-    *   **Solution**: Added an optional `settings` parameter to both `retrieve_secret_direct()` and `get_keyvault_credential()`. When `settings` is passed explicitly, the cache is bypassed entirely. `configure_app_cache()` now passes `settings=settings` to avoid touching the uninitialised cache.
-    *   **Files Modified**: `functions_keyvault.py` (`retrieve_secret_direct`, `get_keyvault_credential`), `app_settings_cache.py` (`configure_app_cache`).
-    *   (Ref: `retrieve_secret_direct`, `get_keyvault_credential`, bootstrap initialisation order, circular dependency)
-
-*   **Key Vault Logging Consistency Fix**
-    *   Replaced all remaining `print()` calls and `logging.error()` / `logging.warning()` calls throughout `functions_keyvault.py` with `log_event()` from `functions_appinsights.py`, consistent with the project logging standard.
-    *   Previously, duplicate log output appeared on startup (e.g. `[Log] ... -- None` and `[LOG] ...`) because some code paths used `print()` or the standard `logging` module alongside `log_event()`.
-    *   **Files Modified**: `functions_keyvault.py` (all helper functions: `retrieve_secret_from_key_vault`, `store_secret_in_key_vault`, `build_full_secret_name`, `keyvault_agent_save_helper`, `keyvault_plugin_save_helper`, `keyvault_plugin_get_helper`, `keyvault_plugin_delete_helper`, `keyvault_agent_delete_helper`).
-    *   (Ref: `log_event`, logging consistency, duplicate startup log output)
-
-*   **Legacy Conversation `chat_type` Default Fix**
-    *   Fixed an issue where conversation details failed to load properly for legacy conversations that were created before the `chat_type` field was introduced.
-    *   **Root Cause**: The metadata API returned `None` for `chat_type` on older conversation documents that pre-date the field, causing downstream consumers to behave incorrectly when determining conversation context.
-    *   **Solution**: Added a default value of `'personal'` to the `chat_type` field in the conversation metadata response: `conversation_item.get('chat_type', 'personal')`.
-    *   **Files Modified**: `route_backend_conversations.py`
-    *   (Ref: `get_conversation_metadata_api`, legacy conversation schema compatibility)
-
-*   **Chat Message Content Overflow / Word-Wrap Fix**
-    *   Fixed an issue where long AI responses with overflowing content (e.g. wide code blocks or tables) were not scrollable, and word-wrap was not functioning correctly within message bubbles.
-    *   **Root Cause**: `.message-content` had `overflow: visible`, which prevented the browser from applying horizontal scroll bars to overflowing child elements.
-    *   **Solution**: Changed `.message-content` to `overflow: auto`, enabling proper word-wrap behaviour and horizontal scrolling for overflowing content while preserving existing layout.
-    *   **Files Modified**: `chats.css`
-    *   (Ref: `.message-content` overflow property)
-
-*   **SimpleMDE Prompt Editor Toolbar Icons Fix**
-    *   Fixed missing/invisible toolbar icons in the SimpleMDE Markdown editor used in the New Prompt dialog, for both light and dark mode themes.
-    *   **Root Cause**: SimpleMDE uses Font Awesome icon classes (e.g. `fa-bold`) on toolbar buttons, but the app does not load Font Awesome — only Bootstrap Icons. This caused all toolbar buttons to render as blank or invisible squares.
-    *   **Solution**: Added CSS rules in `styles.css` to intercept SimpleMDE's Font Awesome class selectors and replace them with the correct Bootstrap Icons Unicode codepoints via `::before` pseudo-elements. Full dark mode styling (toolbar background, icon colours, active state, CodeMirror editor area, preview pane, and statusbar) was also added.
-    *   **Files Modified**:`styles.css`
-    *   (Ref: `.editor-toolbar`, SimpleMDE Bootstrap Icons replacement, dark mode CodeMirror overrides)
-
-*   **Docker Customization: CA Certificate and pip.conf**
-    *   Fixed Docker customization issues related to custom CA certificate handling and `pip.conf` configuration.
-    *   Ensures Python package installation works reliably in environments requiring custom certificate trust and pip configuration.
-    *   (Ref: Docker customization, CA cert setup, `pip.conf` handling)
-    
-
-### **(v0.239.001)**
-*   **Agent Responded Thought — Seconds & Total Duration**
-    *   The "responded" thought now shows time in **seconds** instead of milliseconds, and clarifies it is the total time from the initial user message (e.g., `'gpt-5-nano' responded (16.3s from initial message)`).
-    *   A `request_start_time` is now captured at the top of both the non-streaming and streaming chat handlers, so the duration reflects the full request lifecycle — including content safety, hybrid search, and agent invocation — not just the model response time.
-    *   Applies to all three agent paths: local SK agents (non-streaming), Azure AI Foundry agents, and streaming SK agents.
-    *   (Ref: `route_backend_chats.py`, `request_start_time`, agent responded thoughts)
-
-*   **Enhanced Agent Execution Thoughts**
-    *   Added detailed model-level status messages during agent execution, giving users full visibility into each stage of the AI pipeline.
-    *   **Model Identification**: A new "Sending to '{deployment_name}'" thought appears immediately after "Sending to agent", showing the exact model deployment being used (e.g., `gpt-5-nano`).
-    *   **Generating Response**: A "Generating response..." thought now appears before the agent begins its invocation loop, matching the existing behavior for non-agent GPT calls.
-    *   **Model Responded with Duration**: A "'{deployment_name}' responded ({duration}ms)" thought appears after the agent completes, showing total wall-clock execution time.
-    *   Applies to all three agent paths: local SK agents (streaming and non-streaming) and Azure AI Foundry agents.
-    *   Uses the existing `generation` step type (lightning bolt icon) — no frontend changes required.
-    *   (Ref: `route_backend_chats.py`, `ThoughtTracker`, agent execution pipeline)
-
-*   **List/Grid View Toggle for Agents and Actions**
-    *   Added a list/grid view toggle to all four workspace areas: personal agents, personal actions, group agents, and group actions.
-    *   **Grid View**: Large cards with type icon, humanized name, truncated description, and action buttons (Chat, View, Edit, Delete as applicable).
-    *   **List View**: Improved table layout with fixed column widths (28%/47%/25%), humanized display names, and truncated descriptions with hover tooltips for full text.
-    *   **View Button**: New eye-icon button on every agent and action that opens a read-only detail modal with gradient-header summary cards (Basic Information, Model Configuration, Instructions for agents; Basic Information, Configuration for actions).
-    *   **Name Humanization**: Display names are now automatically parsed — underscores and camelCase/PascalCase boundaries are converted to properly spaced, title-cased words (e.g., `myCustomAgent` → `My Custom Agent`).
-    *   **Persistent Preference**: View mode selection (list/grid) is saved per area in localStorage and restored on page load.
-    *   New shared utility module `view-utils.js` provides reusable functions for all four workspace areas.
-    *   (Ref: `view-utils.js`, `workspace_agents.js`, `workspace_plugins.js`, `plugin_common.js`, `group_agents.js`, `group_plugins.js`, `workspace.html`, `group_workspaces.html`, `styles.css`)
-
-*   **Chat with Agent Button for Group Agents**
-    *   Added a "Chat" button to each group agent row, allowing users to quickly select a group agent and navigate to the chat page.
-    *   (Ref: `group_agents.js`, `group_workspaces.html`)
-
-*   **Hidden Deprecated Action Types**
-    *   Deprecated action types (`sql_schema`, `ui_test`, `queue_storage`, `blob_storage`, `embedding_model`) are now hidden from the action creation wizard type selector. Existing actions of these types remain functional.
-    *   (Ref: `plugin_modal_stepper.js`)
-
-*   **Advanced Settings Collapse Toggle**
-    *   Step 4 (Advanced) content is now hidden behind a collapsible toggle button ("Show Advanced Settings") instead of being displayed by default. Reduces visual noise for most users.
-    *   For SQL action types, the redundant additional fields UI in Step 4 is hidden entirely since all SQL configuration is already handled in Step 3.
-    *   Step 5 (Summary) no longer shows the raw additional fields JSON dump for SQL types, since that data is already shown in the SQL Database Configuration summary card.
-    *   (Ref: `_plugin_modal.html`, `plugin_modal_stepper.js`)
+*   **MultiGPT Endpoint Key Vault Secret Storage and Foundry Fetch Reliability**
+    *   MultiGPT endpoint secrets such as API keys and service principal client secrets now move into Azure Key Vault when Key Vault secret storage is enabled, instead of remaining in saved endpoint payloads.
+    *   Endpoint fetch, test, Foundry listing, and runtime execution now resolve stored secrets server-side by endpoint ID, so reopening an endpoint no longer depends on the browser still holding plaintext credentials.
+    *   Fixed a follow-up regression in Foundry model discovery where sync fetch routes could fail with `'coroutine' object has no attribute 'token'` because async credentials were being reused in a synchronous token acquisition path.
+    *   (Ref: `functions_keyvault.py`, `functions_settings.py`, `route_backend_models.py`, `route_frontend_admin_settings.py`, `semantic_kernel_loader.py`, `foundry_agent_runtime.py`, `admin_model_endpoints.js`, `workspace_model_endpoints.js`, `test_model_endpoints_key_vault_secret_storage.py`, `test_foundry_model_fetch_sync_credentials.py`)
 
 ### **(v0.239.002)**
 
@@ -456,7 +484,6 @@
 *   **Retention Policy UI for Groups and Public Workspaces**
     *   Can now configure conversation and document retention periods directly from the workspace and group management page.
     *   Choose from preset retention periods ranging from 7 days to 10 years, use the organization default, or disable automatic deletion entirely.
-
 *   **Owner-Only Group Agent and Action Management**
     *   New admin setting to restrict group agent and group action management (create, edit, delete) to only the group Owner role.
     *   **Admin Toggle**: "Require Owner to Manage Group Agents and Actions" located in Admin Settings > My Groups section, under the existing group creation membership setting.
@@ -547,7 +574,6 @@
     *   Removed the membership verification from the `setActive` endpoint; the route still requires authentication (`@login_required`, `@user_required`) and the public workspaces feature flag (`@enabled_required`).
     *   Other admin-level endpoints (listing members, viewing stats, ownership transfer) retain their membership checks.
     *   (Ref: `route_backend_public_workspaces.py`, `api_set_active_public_workspace`)
-
 *   **Chats Page User Settings Hardening**
     *   Fixed a user-specific chats page failure where only one affected user could not load `/chats` due to malformed per-user settings data.
     *   **Root Cause**: The chats route assumed `user_settings["settings"]` was always a dictionary. If that field existed but had an invalid type (for example string, null, or list), the page could fail before rendering.

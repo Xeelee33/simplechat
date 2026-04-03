@@ -8,9 +8,69 @@ from functions_conversation_unread import clear_conversation_unread, normalize_c
 from functions_notifications import mark_chat_response_notifications_read_for_conversation
 from flask import Response, request
 from functions_debug import debug_print
+from functions_message_artifacts import filter_assistant_artifact_items
 from swagger_wrapper import swagger_route, get_auth_security
 from functions_activity_logging import log_conversation_creation, log_conversation_deletion, log_conversation_archival
 from functions_thoughts import archive_thoughts_for_conversation, delete_thoughts_for_conversation
+
+def normalize_chat_type(conversation_item):
+    chat_type = conversation_item.get('chat_type')
+    if chat_type:
+        if chat_type == 'personal':
+            conversation_item['chat_type'] = 'personal_single_user'
+            return conversation_item['chat_type'], True
+        return chat_type, False
+
+    primary_context = next(
+        (ctx for ctx in conversation_item.get('context', []) if ctx.get('type') == 'primary'),
+        None
+    )
+    if primary_context:
+        if primary_context.get('scope') == 'group':
+            chat_type = 'group-single-user'
+        elif primary_context.get('scope') == 'public':
+            chat_type = 'public'
+        else:
+            chat_type = 'personal_single_user'
+    else:
+        chat_type = 'personal_single_user'
+
+    conversation_item['chat_type'] = chat_type
+    return chat_type, True
+
+
+def _collect_child_message_documents(conversation_id, root_message_ids):
+    """Collect child records linked by parent_message_id for the provided message ids."""
+    pending_ids = [message_id for message_id in root_message_ids if message_id]
+    seen_ids = set(pending_ids)
+    child_docs = []
+
+    while pending_ids:
+        parent_message_id = pending_ids.pop(0)
+        child_query = (
+            "SELECT * FROM c "
+            "WHERE c.conversation_id = @conversation_id "
+            "AND c.parent_message_id = @parent_message_id"
+        )
+        child_results = list(cosmos_messages_container.query_items(
+            query=child_query,
+            parameters=[
+                {'name': '@conversation_id', 'value': conversation_id},
+                {'name': '@parent_message_id', 'value': parent_message_id},
+            ],
+            partition_key=conversation_id,
+        ))
+
+        for child_doc in child_results:
+            child_id = child_doc.get('id')
+            if not child_id or child_id in seen_ids:
+                continue
+
+            seen_ids.add(child_id)
+            child_docs.append(child_doc)
+            pending_ids.append(child_id)
+
+    return child_docs
 
 def register_route_backend_conversations(app):
 
@@ -44,6 +104,7 @@ def register_route_backend_conversations(app):
                 query=message_query,
                 partition_key=conversation_id
             ))
+            all_items = filter_assistant_artifact_items(all_items)
             
             debug_print(f"Query returned {len(all_items)} total items (before filtering)")
             
@@ -316,6 +377,7 @@ def register_route_backend_conversations(app):
             'strict': False,
             'is_pinned': False,
             'is_hidden': False,
+            'chat_type': 'new',
             'has_unread_assistant_response': False,
             'last_unread_assistant_message_id': None,
             'last_unread_assistant_at': None,
@@ -378,7 +440,9 @@ def register_route_backend_conversations(app):
             return jsonify({
                 'message': 'Conversation updated', 
                 'title': new_title,
-                'classification': conversation_item.get('classification', []) # Send classifications if any
+                'classification': conversation_item.get('classification', []),
+                'context': conversation_item.get('context', []),
+                'chat_type': conversation_item.get('chat_type')
             }), 200
         except Exception as e:
             print(e)
@@ -805,6 +869,10 @@ def register_route_backend_conversations(app):
             if conversation_item.get('user_id') != user_id:
                 return jsonify({'error': 'Forbidden'}), 403
             
+            _, updated = normalize_chat_type(conversation_item)
+            if updated:
+                cosmos_conversations_container.upsert_item(conversation_item)
+
             # Return the full conversation metadata
             return jsonify({
                 "conversation_id": conversation_id,
@@ -917,6 +985,7 @@ def register_route_backend_conversations(app):
                 parameters=params,
                 enable_cross_partition_query=True
             ))
+            raw_messages = filter_assistant_artifact_items(raw_messages)
         except Exception as e:
             debug_print(f"Error querying messages for summary: {e}")
             return jsonify({'error': 'Failed to query messages'}), 500
@@ -1133,8 +1202,8 @@ def register_route_backend_conversations(app):
                 filtered_in = []
                 
                 for c in conversations:
-                    # Default to 'personal' if chat_type is not defined (legacy conversations)
-                    chat_type = c.get('chat_type', 'personal')
+                    # Default to 'personal_single_user' if chat_type is not defined (legacy conversations)
+                    chat_type = c.get('chat_type', 'personal_single_user')
                     if chat_type in chat_types:
                         filtered_in.append(c)
                     else:
@@ -1145,7 +1214,7 @@ def register_route_backend_conversations(app):
                 
                 # Show some examples of filtered out chat types
                 if filtered_out:
-                    unique_types = set(c.get('chat_type', 'None/personal') for c in filtered_out[:10])
+                    unique_types = set(c.get('chat_type', 'None/personal_single_user') for c in filtered_out[:10])
                     debug_print(f"   Filtered out chat_types (sample): {unique_types}")
             
             # Filter by classifications if specified
@@ -1256,7 +1325,7 @@ def register_route_backend_conversations(app):
                             'title': conversation.get('title', 'Untitled'),
                             'last_updated': conversation.get('last_updated', ''),
                             'classification': conversation.get('classification', []),
-                            'chat_type': conversation.get('chat_type', 'personal'),
+                            'chat_type': conversation.get('chat_type', 'personal_single_user'),
                             'is_pinned': conversation.get('is_pinned', False),
                             'is_hidden': conversation.get('is_hidden', False)
                         },
@@ -1406,7 +1475,7 @@ def register_route_backend_conversations(app):
                     )
                     if conversation.get('user_id') != user_id:
                         return jsonify({'error': 'You can only delete messages from your own conversations'}), 403
-                except:
+                except Exception as ex:
                     return jsonify({'error': 'Conversation not found'}), 404
             elif message_user_id != user_id:
                 return jsonify({'error': 'You can only delete your own messages'}), 403
@@ -1468,6 +1537,13 @@ def register_route_backend_conversations(app):
             else:
                 # Delete only the specified message
                 messages_to_delete = [message_doc]
+
+            child_message_docs = _collect_child_message_documents(
+                conversation_id,
+                [message.get('id') for message in messages_to_delete],
+            )
+            if child_message_docs:
+                messages_to_delete.extend(child_message_docs)
             
             # THREAD ATTEMPT PROMOTION: If deleting an active thread attempt, promote next attempt
             if messages_to_delete:
@@ -1605,7 +1681,7 @@ def register_route_backend_conversations(app):
                     )
                     if conversation.get('user_id') != user_id:
                         return jsonify({'error': 'You can only retry messages from your own conversations'}), 403
-                except:
+                except Exception as ex:
                     return jsonify({'error': 'Conversation not found'}), 404
             elif message_user_id != user_id:
                 return jsonify({'error': 'You can only retry your own messages'}), 403
@@ -1824,7 +1900,7 @@ def register_route_backend_conversations(app):
                     )
                     if conversation.get('user_id') != user_id:
                         return jsonify({'error': 'You can only edit messages from your own conversations'}), 403
-                except:
+                except Exception as ex:
                     return jsonify({'error': 'Conversation not found'}), 404
             elif message_user_id != user_id:
                 return jsonify({'error': 'You can only edit your own messages'}), 403
@@ -2033,7 +2109,7 @@ def register_route_backend_conversations(app):
                     )
                     if conversation.get('user_id') != user_id:
                         return jsonify({'error': 'You can only switch attempts in your own conversations'}), 403
-                except:
+                except Exception as ex:
                     return jsonify({'error': 'Conversation not found'}), 404
             elif message_user_id != user_id:
                 return jsonify({'error': 'You can only switch attempts in your own conversations'}), 403
