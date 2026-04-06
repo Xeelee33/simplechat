@@ -12,8 +12,9 @@ Enhanced in version: **0.240.004**
 Enhanced in version: **0.240.005**
 Enhanced in version: **0.240.006**
 Enhanced in version: **0.240.007**
+Enhanced in version: **0.240.021**
 
-Related configuration update: `application/single_app/config.py` version updated to **0.240.007**.
+Related configuration update: `application/single_app/config.py` version updated to **0.240.021**.
 
 ## Purpose
 
@@ -141,6 +142,29 @@ documents from backup artifacts.
 - Default behavior restores into suffixed target indexes (for example `simplechat-user-index-restore`) to reduce accidental in-place overwrite risk.
 - Dry-run mode validates backup inputs and writes a restore manifest without calling Azure.
 
+### Restore from Azure Blob Storage Container (New in 0.240.021)
+
+The restore script now supports reading backup artifacts directly from the same blob container layout produced by the backup script.
+
+New restore CLI options:
+
+- `--blob-container-url`
+- `--blob-prefix`
+- `--backup-id`
+- `--output-root`
+
+Behavior:
+
+- Restores `manifest.json`, `index-schema.json`, and `documents.jsonl` directly from blob paths under `<blob_prefix>/<backup_id>/...`.
+- Does not require local backup folders when blob source mode is used.
+- Writes restore manifests locally under `--output-root` (default `artifacts/ai_search_restores`).
+
+Requirements:
+
+- `azure-storage-blob` package in the runtime.
+- Identity with read access to the target blob container.
+- `--backup-id` is required when restoring from blob source.
+
 ### Storage Layout
 
 The script writes backups under:
@@ -152,6 +176,12 @@ Where each backup includes:
 - `manifest.json`
 - `indexes/<index_name>/index-schema.json`
 - `indexes/<index_name>/documents.jsonl`
+
+When uploaded to blob (`--upload-to-blob` or `--write-direct-to-blob`), the same relative structure is used under:
+
+- `<blob_prefix>/<backup_id>/manifest.json`
+- `<blob_prefix>/<backup_id>/indexes/<index_name>/index-schema.json`
+- `<blob_prefix>/<backup_id>/indexes/<index_name>/documents.jsonl`
 
 When `--dry-run-validate-remote` is enabled, per-index manifest results also include:
 
@@ -227,6 +257,10 @@ Example restore run:
 
 `py -3 scripts/restore_ai_search_indexes.py --endpoint https://<service>.search.windows.net --backup-path artifacts/ai_search_backups/<backup_id>`
 
+Example restore directly from blob backup artifacts:
+
+`python scripts/restore_ai_search_indexes.py --endpoint https://<service>.search.azure.us --blob-container-url https://stasbxaisearchbackup.blob.core.usgovcloudapi.net/ai-search-backups --blob-prefix simplechat/dev --backup-id 20260325T182513Z`
+
 ## Integration Points
 
 - Search writes and metadata propagation occur in `application/single_app/functions_documents.py`
@@ -247,6 +281,7 @@ Example restore run:
 - 0.240.005 enhancement validated by script compile check and updated backup scaffold functional tests.
 - 0.240.006 enhancement validated by script compile check and updated backup scaffold functional tests.
 - 0.240.007 enhancement validated by script compile check and updated backup scaffold functional tests.
+- 0.240.021 enhancement validated by script compile check and updated restore scaffold functional tests.
 
 ## Troubleshooting
 

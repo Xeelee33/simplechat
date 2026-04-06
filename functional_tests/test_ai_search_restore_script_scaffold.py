@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Functional test for Azure AI Search restore script scaffold.
-Version: 0.239.014
-Implemented in: 0.239.014
+Version: 0.240.021
+Implemented in: 0.240.021
 
 This test ensures that the restore script dry-run mode validates backup artifacts,
 plans target index names, and writes a restore manifest without Azure connectivity.
@@ -155,6 +155,54 @@ def test_restore_script_dry_run_scaffold():
         return True
 
 
+def test_restore_script_blob_source_markers_present():
+    """Validate blob-source restore flags and helper markers are present in restore script."""
+    print("🔍 Testing Azure AI Search restore script blob-source markers...")
+
+    script_path = os.path.abspath(
+        os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "..",
+            "scripts",
+            "restore_ai_search_indexes.py",
+        )
+    )
+
+    if not os.path.exists(script_path):
+        print(f"❌ Restore script not found: {script_path}")
+        return False
+
+    with open(script_path, "r", encoding="utf-8") as script_file:
+        script_content = script_file.read()
+
+    required_markers = [
+        '"--blob-container-url"',
+        '"--blob-prefix"',
+        '"--backup-id"',
+        '"--output-root"',
+        'build_blob_backup_root(',
+        'load_manifest_from_blob(',
+        'upload_documents_from_jsonl_blob(',
+        'iter_jsonl_lines_from_blob(',
+        'count_jsonl_documents_from_blob(',
+        'restore_from_blob',
+        'Restoring from blob requires --backup-id.',
+    ]
+
+    missing_markers = [marker for marker in required_markers if marker not in script_content]
+    if missing_markers:
+        print(f"❌ Missing blob-source restore markers: {missing_markers}")
+        return False
+
+    print("✅ Blob-source restore marker test passed")
+    return True
+
+
 if __name__ == "__main__":
-    success = test_restore_script_dry_run_scaffold()
+    tests = [
+        test_restore_script_dry_run_scaffold,
+        test_restore_script_blob_source_markers_present,
+    ]
+    results = [test() for test in tests]
+    success = all(results)
     sys.exit(0 if success else 1)
