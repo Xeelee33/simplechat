@@ -147,7 +147,11 @@ def test_version_alignment_for_safe_int_fix():
     config_content = _read_file("application", "single_app", "config.py")
 
     required_markers = [
+<<<<<<< HEAD
+        "VERSION = \"0.239.016\""
+=======
         "VERSION = \"0.240.002\""
+>>>>>>> feedback-user-timeout
     ]
 
     missing_markers = [marker for marker in required_markers if marker not in config_content]
