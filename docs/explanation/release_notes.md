@@ -4,6 +4,17 @@ This page tracks notable Simple Chat releases and organizes the detailed change 
 
 For feature-focused and fix-focused drill-downs by version, see [Features by Version](/explanation/features/) and [Fixes by Version](/explanation/fixes/).
 
+### **(v0.240.057)**
+
+#### New Features
+
+*   **Daily Azure Government Backup Job Automation Script**
+    *   Added a reusable Azure Government provisioning script to create and maintain a scheduled Azure Container Apps Job that runs the Azure AI Search backup workflow once per day.
+    *   The script configures managed identity, role assignments, Container Apps environment/job setup, and uses direct-to-blob backup execution so backups write to Azure Storage without local persistence.
+    *   Operations: run on demand with `az containerapp job start -g <resource-group> -n job-search-backup-daily` and verify with `az containerapp job execution list -g <resource-group> -n job-search-backup-daily -o table`.
+    *   Added companion runbook documentation and a functional scaffold test to validate core script and README markers for operational consistency.
+    *   (Ref: `scripts/setup_daily_ai_search_backup_job_azure_gov.ps1`, `scripts/README_DAILY_AI_SEARCH_BACKUP_JOB_AZURE_GOV.md`, `docs/explanation/features/AZURE_DAILY_SEARCH_BACKUP_JOB_AUTOMATION.md`, `functional_tests/test_daily_ai_search_backup_job_script_scaffold.py`, `application/single_app/config.py`)
+
 ### **(v0.240.021)**
 
 #### New Features
