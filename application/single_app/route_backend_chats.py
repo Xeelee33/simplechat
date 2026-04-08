@@ -122,6 +122,146 @@ def get_tabular_analysis_function_names():
     return TabularProcessingPlugin.get_analysis_function_names()
 
 
+def normalize_content_safety_allowlist_terms(raw_terms):
+    """Normalize allowlist terms from settings into a unique list of non-empty strings."""
+    if isinstance(raw_terms, list):
+        candidate_terms = raw_terms
+    elif isinstance(raw_terms, str):
+        candidate_terms = re.split(r"[,\n]", raw_terms)
+    else:
+        candidate_terms = []
+
+    normalized = []
+    seen = set()
+    for term in candidate_terms:
+        term_str = str(term).strip()
+        if not term_str:
+            continue
+        term_key = term_str.lower()
+        if term_key in seen:
+            continue
+        seen.add(term_key)
+        normalized.append(term_str)
+    return normalized
+
+
+def get_content_safety_allowlist_override(
+    message_text,
+    triggered_categories,
+    blocklist_matches,
+    settings,
+):
+    """
+    Return override details when a blocked prompt should be exempted as a known false-positive.
+
+    Safety constraints:
+    - Never override when Content Safety blocklist matches are present.
+    - Require exact word-boundary term match from allowlist.
+    - Require all severity>=4 categories to be in configured allowlist categories.
+    """
+    if blocklist_matches:
+        return {
+            "override": False,
+            "matched_terms": [],
+            "reason": "blocklist_match_present",
+        }
+
+    allowlist_terms = normalize_content_safety_allowlist_terms(
+        settings.get('content_safety_false_positive_allowlist', [])
+    )
+    if not allowlist_terms:
+        return {
+            "override": False,
+            "matched_terms": [],
+            "reason": "allowlist_empty",
+        }
+
+    message_text = str(message_text or "")
+    matched_terms = []
+    for term in allowlist_terms:
+        pattern = rf"(?<!\w){re.escape(term)}(?!\w)"
+        if re.search(pattern, message_text, flags=re.IGNORECASE):
+            matched_terms.append(term)
+
+    if not matched_terms:
+        return {
+            "override": False,
+            "matched_terms": [],
+            "reason": "no_allowlist_match",
+        }
+
+    configured_categories = settings.get(
+        'content_safety_false_positive_allowlist_categories',
+        ['Hate'],
+    )
+    if not isinstance(configured_categories, list):
+        configured_categories = ['Hate']
+
+    allowed_categories = {
+        str(category).strip().lower() for category in configured_categories if str(category).strip()
+    }
+    if not allowed_categories:
+        allowed_categories = {'hate'}
+
+    severe_categories = [
+        category for category in (triggered_categories or [])
+        if int(category.get('severity') or 0) >= 4
+    ]
+    disallowed_severe = [
+        category for category in severe_categories
+        if str(category.get('category', '')).strip().lower() not in allowed_categories
+    ]
+
+    if disallowed_severe:
+        return {
+            "override": False,
+            "matched_terms": matched_terms,
+            "reason": "disallowed_severe_categories_present",
+        }
+
+    return {
+        "override": True,
+        "matched_terms": matched_terms,
+        "reason": "allowlist_matched_and_categories_allowed",
+    }
+
+
+def is_prompt_content_filter_error(error: Exception) -> bool:
+    """Return True when an exception indicates Azure OpenAI prompt content filtering."""
+    error_text = str(error or '').lower()
+    markers = [
+        'content_filter',
+        'responsibleaipolicyviolation',
+        'prompt triggering azure openai\'s content management policy',
+        'response was filtered due to the prompt',
+    ]
+    return any(marker in error_text for marker in markers)
+
+
+def build_allowlist_disambiguation_system_message(matched_terms: list[str]) -> dict[str, str] | None:
+    """Build a system message clarifying benign intent for allowlisted false-positive terms."""
+    if not matched_terms:
+        return None
+
+    terms_text = ', '.join(matched_terms)
+    return {
+        'role': 'system',
+        'content': (
+            'Disambiguation note for moderation false positives: '
+            f"the user terms [{terms_text}] are known benign proper nouns/abbreviations in this context. "
+            'Answer the user request normally while continuing to follow all safety policies.'
+        )
+    }
+
+
+def add_allowlist_disambiguation_to_messages(messages: list[dict[str, Any]], matched_terms: list[str]) -> list[dict[str, Any]]:
+    """Return a copy of messages with a disambiguation system message prepended when applicable."""
+    disambiguation_message = build_allowlist_disambiguation_system_message(matched_terms)
+    if not disambiguation_message:
+        return messages
+    return [disambiguation_message] + list(messages)
+
+
 def get_tabular_thought_excluded_parameter_names():
     """Return tabular parameter names hidden from thought details."""
     from semantic_kernel_plugins.tabular_processing_plugin import TabularProcessingPlugin
@@ -5938,6 +6078,7 @@ def register_route_backend_chats(app):
             block_reasons = []
             triggered_categories = []
             blocklist_matches = []
+            content_safety_allowlist_matched_terms = []
 
             if settings.get('enable_content_safety') and "content_safety_client" in CLIENTS:
                 thought_tracker.add_thought('content_safety', 'Checking content safety...')
@@ -5970,6 +6111,32 @@ def register_route_backend_chats(app):
                     if len(blocklist_matches) > 0:
                         blocked = True
                         block_reasons.append("Blocklist match")
+
+                    if blocked:
+                        override_details = get_content_safety_allowlist_override(
+                            message_text=user_message,
+                            triggered_categories=triggered_categories,
+                            blocklist_matches=blocklist_matches,
+                            settings=settings,
+                        )
+                        if override_details.get('override'):
+                            blocked = False
+                            content_safety_allowlist_matched_terms = override_details.get('matched_terms', [])
+                            thought_tracker.add_thought(
+                                'content_safety',
+                                'Content Safety false-positive allowlist override applied',
+                                detail=f"matched_terms={override_details.get('matched_terms', [])}",
+                            )
+                            log_event(
+                                "Content Safety false-positive allowlist override applied.",
+                                extra={
+                                    "conversation_id": conversation_id,
+                                    "user_id": user_id,
+                                    "matched_terms": override_details.get('matched_terms', []),
+                                    "triggered_categories": triggered_categories,
+                                },
+                                level=logging.INFO,
+                            )
                     
                     if blocked:
                         # Upsert to safety container
@@ -7812,6 +7979,19 @@ def register_route_backend_chats(app):
                         debug_print(f"Reasoning effort not supported by {gpt_model}, retrying without reasoning_effort...")
                         api_params.pop('reasoning_effort', None)
                         response = gpt_client.chat.completions.create(**api_params)
+                    elif (
+                        content_safety_allowlist_matched_terms
+                        and is_prompt_content_filter_error(e)
+                    ):
+                        debug_print(
+                            "Prompt content filter triggered after allowlist override; retrying with disambiguation context..."
+                        )
+                        retry_params = dict(api_params)
+                        retry_params['messages'] = add_allowlist_disambiguation_to_messages(
+                            conversation_history_for_api,
+                            content_safety_allowlist_matched_terms,
+                        )
+                        response = gpt_client.chat.completions.create(**retry_params)
                     elif gpt_provider in ('aifoundry', 'new_foundry') and 'api version not supported' in error_str:
                         debug_print("Foundry API version not supported. Retrying with fallback versions...")
                         api_params.pop('reasoning_effort', None)
@@ -8834,6 +9014,7 @@ def register_route_backend_chats(app):
 
                 # Content Safety check (matching non-streaming path)
                 blocked = False
+                content_safety_allowlist_matched_terms = []
                 if settings.get('enable_content_safety') and "content_safety_client" in CLIENTS:
                     yield emit_thought('content_safety', 'Checking content safety...')
                     try:
@@ -8868,6 +9049,32 @@ def register_route_backend_chats(app):
                         if len(blocklist_matches) > 0:
                             blocked = True
                             block_reasons.append("Blocklist match")
+
+                        if blocked:
+                            override_details = get_content_safety_allowlist_override(
+                                message_text=user_message,
+                                triggered_categories=triggered_categories,
+                                blocklist_matches=blocklist_matches,
+                                settings=settings,
+                            )
+                            if override_details.get('override'):
+                                blocked = False
+                                content_safety_allowlist_matched_terms = override_details.get('matched_terms', [])
+                                yield emit_thought(
+                                    'content_safety',
+                                    'Content Safety false-positive allowlist override applied',
+                                    detail=f"matched_terms={override_details.get('matched_terms', [])}",
+                                )
+                                log_event(
+                                    "Content Safety false-positive allowlist override applied (streaming).",
+                                    extra={
+                                        "conversation_id": conversation_id,
+                                        "user_id": user_id,
+                                        "matched_terms": override_details.get('matched_terms', []),
+                                        "triggered_categories": triggered_categories,
+                                    },
+                                    level=logging.INFO,
+                                )
 
                         if blocked:
                             # Upsert to safety container
@@ -10019,6 +10226,19 @@ def register_route_backend_chats(app):
                                 # Retry without reasoning_effort
                                 stream_params.pop('reasoning_effort', None)
                                 stream = gpt_client.chat.completions.create(**stream_params)
+                            elif (
+                                content_safety_allowlist_matched_terms
+                                and is_prompt_content_filter_error(e)
+                            ):
+                                debug_print(
+                                    "Prompt content filter triggered after allowlist override in streaming path; retrying with disambiguation context..."
+                                )
+                                retry_stream_params = dict(stream_params)
+                                retry_stream_params['messages'] = add_allowlist_disambiguation_to_messages(
+                                    conversation_history_for_api,
+                                    content_safety_allowlist_matched_terms,
+                                )
+                                stream = gpt_client.chat.completions.create(**retry_stream_params)
                             else:
                                 raise
                         

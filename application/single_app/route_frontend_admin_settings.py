@@ -428,6 +428,30 @@ def register_route_frontend_admin_settings(app):
 
                 return parsed_value
 
+            def parse_admin_text_list(raw_value):
+                """Parse comma/newline-delimited text into a unique, trimmed list of values."""
+                if not raw_value:
+                    return []
+
+                normalized_input = str(raw_value).replace('\r\n', '\n').replace('\r', '\n')
+                parts = []
+                for line in normalized_input.split('\n'):
+                    for item in line.split(','):
+                        item = item.strip()
+                        if item:
+                            parts.append(item)
+
+                deduped = []
+                seen = set()
+                for item in parts:
+                    item_key = item.lower()
+                    if item_key in seen:
+                        continue
+                    seen.add(item_key)
+                    deduped.append(item)
+
+                return deduped
+
             # --- Fetch all other form data as before ---
             app_title = form_data.get('app_title', 'AI Chat Application')
             max_file_size_mb = int(form_data.get('max_file_size_mb', 16))
@@ -459,6 +483,14 @@ def register_route_frontend_admin_settings(app):
             require_member_of_control_center_admin = form_data.get('require_member_of_control_center_admin') == 'on'
             require_member_of_control_center_dashboard_reader = form_data.get('require_member_of_control_center_dashboard_reader') == 'on'
             require_member_of_feedback_admin = form_data.get('require_member_of_feedback_admin') == 'on'
+            content_safety_false_positive_allowlist = parse_admin_text_list(
+                form_data.get('content_safety_false_positive_allowlist', '')
+            )
+            content_safety_false_positive_allowlist_categories = parse_admin_text_list(
+                form_data.get('content_safety_false_positive_allowlist_categories', 'Hate')
+            )
+            if not content_safety_false_positive_allowlist_categories:
+                content_safety_false_positive_allowlist_categories = ['Hate']
 
             web_search_consent_message = (
                 "When you use Grounding with Bing Search, your customer data is transferred "
@@ -1241,6 +1273,8 @@ def register_route_frontend_admin_settings(app):
                 'enable_content_safety_apim': form_data.get('enable_content_safety_apim') == 'on',
                 'azure_apim_content_safety_endpoint': form_data.get('azure_apim_content_safety_endpoint', '').strip(),
                 'azure_apim_content_safety_subscription_key': form_data.get('azure_apim_content_safety_subscription_key', '').strip(),
+                'content_safety_false_positive_allowlist': content_safety_false_positive_allowlist,
+                'content_safety_false_positive_allowlist_categories': content_safety_false_positive_allowlist_categories,
                 'require_member_of_safety_violation_admin': require_member_of_safety_violation_admin, # ADDED
                 'require_member_of_feedback_admin': require_member_of_feedback_admin, # ADDED
 

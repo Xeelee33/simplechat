@@ -246,6 +246,8 @@ def get_settings(use_cosmos=False, include_source=False):
         'enable_content_safety_apim': False,
         'azure_apim_content_safety_endpoint': '',
         'azure_apim_content_safety_subscription_key': '',
+        'content_safety_false_positive_allowlist': [],
+        'content_safety_false_positive_allowlist_categories': ['Hate'],
 
         # User Feedback / Conversation Archiving
         'enable_user_feedback': True,

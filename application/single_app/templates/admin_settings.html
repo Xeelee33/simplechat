@@ -4543,6 +4543,39 @@
                             </div>
                         </div>
 
+                        <hr class="my-3">
+                        <h6 class="mb-2">False-Positive Allowlist (Optional)</h6>
+                        <p class="text-muted small mb-3">
+                            Provide terms that are known false positives (for example, Jaws). Terms are matched using exact word boundaries.
+                            Blocklist matches are never overridden.
+                        </p>
+
+                        <div class="mb-3">
+                            <label for="content_safety_false_positive_allowlist" class="form-label">
+                                Allowlisted Terms (comma or newline separated)
+                            </label>
+                            <textarea
+                                class="form-control"
+                                id="content_safety_false_positive_allowlist"
+                                name="content_safety_false_positive_allowlist"
+                                rows="3"
+                            >{{ (settings.content_safety_false_positive_allowlist or []) | join('\n') }}</textarea>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="content_safety_false_positive_allowlist_categories" class="form-label">
+                                Allowed Categories for Override (comma separated)
+                            </label>
+                            <input
+                                type="text"
+                                class="form-control"
+                                id="content_safety_false_positive_allowlist_categories"
+                                name="content_safety_false_positive_allowlist_categories"
+                                value="{{ (settings.content_safety_false_positive_allowlist_categories or ['Hate']) | join(', ') }}"
+                            >
+                            <small class="text-muted">Default: Hate</small>
+                        </div>
+
                         <button type="button" class="btn btn-secondary mt-3" id="test_safety_button">
                             Test Safety Connection
                         </button>
