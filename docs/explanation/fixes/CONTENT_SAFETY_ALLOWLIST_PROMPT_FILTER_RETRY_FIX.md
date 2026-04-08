@@ -55,3 +55,8 @@ Related config version update:
 
 - **Before**: allowlisted false positives could still fail with Azure OpenAI prompt content filter 400 after Content Safety bypass.
 - **After**: app attempts a disambiguation-context retry, then a benign-placeholder retry for matched allowlist terms before failing.
+
+## Follow-Up Hardening Note
+
+- Additional hardening for this same issue lineage is documented in release notes version **0.240.070**.
+- See: `docs/explanation/release_notes.md` under **Content Safety Allowlist Prompt-Filter Fallback Hardening**.

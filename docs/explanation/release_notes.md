@@ -4,6 +4,22 @@ This page tracks notable Simple Chat releases and organizes the detailed change 
 
 For feature-focused and fix-focused drill-downs by version, see [Features by Version](/explanation/features/) and [Fixes by Version](/explanation/fixes/).
 
+### **(v0.240.070)**
+
+#### Bug Fixes
+
+*   **Content Safety False-Positive Allowlist Configuration**
+    *   Added admin-configurable allowlist controls for known benign false-positive terms and allowed safety categories in the Content Safety settings area.
+    *   Updated chat moderation flow to apply allowlist overrides only when strict constraints are met (exact term matching, no blocklist hits, and category validation), reducing unnecessary prompt blocks.
+    *   Added focused functional coverage for both admin settings persistence and runtime allowlist behavior.
+    *   (Ref: `admin_settings.html`, `route_frontend_admin_settings.py`, `functions_settings.py`, `route_backend_chats.py`, `test_admin_content_safety_allowlist_settings.py`, `test_content_safety_allowlist_override.py`, `CONTENT_SAFETY_FALSE_POSITIVE_ALLOWLIST_FIX.md`, `CONTENT_SAFETY_ALLOWLIST_ADMIN_CONFIGURATION.md`)
+
+*   **Content Safety Allowlist Prompt-Filter Fallback Hardening**
+    *   Fixed a recurring streaming interruption where allowlisted false-positive prompts could still fail with Azure OpenAI `content_filter` 400 errors after the initial disambiguation retry.
+    *   Added a second fallback retry path in both standard and streaming chat flows that masks matched benign allowlist terms with neutral placeholders and prepends moderation-safe context.
+    *   This preserves the existing safety posture (no blocklist bypass and Azure OpenAI policy enforcement remains active) while reducing repeat false-positive interruptions.
+    *   (Ref: `route_backend_chats.py`, `test_content_safety_allowlist_prompt_filter_retry.py`, `CONTENT_SAFETY_ALLOWLIST_PROMPT_FILTER_RETRY_FIX.md`)
+
 ### **(v0.240.063)**
 
 #### New Features
