@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
 Functional test for content safety allowlist prompt-filter retry.
-Version: 0.240.069
-Implemented in: 0.240.069
+Version: 0.240.070
+Implemented in: 0.240.070
 
-This test ensures chat paths include one retry with disambiguation context when
-Azure OpenAI prompt filtering occurs after a Content Safety allowlist override.
+This test ensures chat paths include fallback retries with disambiguation context
+and benign placeholder masking when Azure OpenAI prompt filtering occurs after
+a Content Safety allowlist override.
 """
 
 import os
@@ -29,11 +30,15 @@ def test_allowlist_prompt_filter_retry_markers():
     required_markers = [
         'def is_prompt_content_filter_error(',
         'def add_allowlist_disambiguation_to_messages(',
+        'def add_allowlist_placeholder_mask_to_messages(',
         'content_safety_allowlist_matched_terms = []',
         'Prompt content filter triggered after allowlist override; retrying with disambiguation context',
         'Prompt content filter triggered after allowlist override in streaming path; retrying with disambiguation context',
+        'Prompt content filter persisted after disambiguation retry; retrying with benign placeholders',
+        'Prompt content filter persisted after disambiguation retry in streaming path; retrying with benign placeholders',
         'is_prompt_content_filter_error(e)',
         'add_allowlist_disambiguation_to_messages(',
+        'add_allowlist_placeholder_mask_to_messages(',
     ]
 
     missing = [marker for marker in required_markers if marker not in content]

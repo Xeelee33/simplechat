@@ -262,6 +262,61 @@ def add_allowlist_disambiguation_to_messages(messages: list[dict[str, Any]], mat
     return [disambiguation_message] + list(messages)
 
 
+def build_allowlist_placeholder_system_message() -> dict[str, str]:
+    """Build a system message that explains benign placeholders used to avoid false-positive prompt filtering."""
+    return {
+        'role': 'system',
+        'content': (
+            'Moderation fallback note: some benign user terms were replaced with neutral placeholders '
+            'like [benign-term-1] due to false-positive filtering. Treat those placeholders as neutral '
+            'proper nouns and answer the request normally while continuing to follow all safety policies.'
+        )
+    }
+
+
+def add_allowlist_placeholder_mask_to_messages(
+    messages: list[dict[str, Any]],
+    matched_terms: list[str]
+) -> list[dict[str, Any]]:
+    """Return messages with matched allowlist terms masked in the last user message and a benign-placeholder system note prepended."""
+    if not messages or not matched_terms:
+        return messages
+
+    masked_messages = [dict(message) for message in list(messages)]
+    last_user_index = None
+
+    for idx in range(len(masked_messages) - 1, -1, -1):
+        if masked_messages[idx].get('role') == 'user' and isinstance(masked_messages[idx].get('content'), str):
+            last_user_index = idx
+            break
+
+    if last_user_index is None:
+        return [build_allowlist_placeholder_system_message()] + masked_messages
+
+    original_content = masked_messages[last_user_index].get('content', '')
+    masked_content = original_content
+    unique_terms = []
+    seen = set()
+    for term in matched_terms:
+        term_key = str(term).strip().lower()
+        if not term_key or term_key in seen:
+            continue
+        seen.add(term_key)
+        unique_terms.append(str(term).strip())
+
+    for index, term in enumerate(unique_terms, start=1):
+        pattern = rf"(?<!\w){re.escape(term)}(?!\w)"
+        masked_content = re.sub(
+            pattern,
+            f"[benign-term-{index}]",
+            masked_content,
+            flags=re.IGNORECASE
+        )
+
+    masked_messages[last_user_index]['content'] = masked_content
+    return [build_allowlist_placeholder_system_message()] + masked_messages
+
+
 def get_tabular_thought_excluded_parameter_names():
     """Return tabular parameter names hidden from thought details."""
     from semantic_kernel_plugins.tabular_processing_plugin import TabularProcessingPlugin
@@ -7991,7 +8046,21 @@ def register_route_backend_chats(app):
                             conversation_history_for_api,
                             content_safety_allowlist_matched_terms,
                         )
-                        response = gpt_client.chat.completions.create(**retry_params)
+                        try:
+                            response = gpt_client.chat.completions.create(**retry_params)
+                        except Exception as retry_error:
+                            if is_prompt_content_filter_error(retry_error):
+                                debug_print(
+                                    "Prompt content filter persisted after disambiguation retry; retrying with benign placeholders..."
+                                )
+                                placeholder_retry_params = dict(api_params)
+                                placeholder_retry_params['messages'] = add_allowlist_placeholder_mask_to_messages(
+                                    conversation_history_for_api,
+                                    content_safety_allowlist_matched_terms,
+                                )
+                                response = gpt_client.chat.completions.create(**placeholder_retry_params)
+                            else:
+                                raise
                     elif gpt_provider in ('aifoundry', 'new_foundry') and 'api version not supported' in error_str:
                         debug_print("Foundry API version not supported. Retrying with fallback versions...")
                         api_params.pop('reasoning_effort', None)
@@ -10238,7 +10307,21 @@ def register_route_backend_chats(app):
                                     conversation_history_for_api,
                                     content_safety_allowlist_matched_terms,
                                 )
-                                stream = gpt_client.chat.completions.create(**retry_stream_params)
+                                try:
+                                    stream = gpt_client.chat.completions.create(**retry_stream_params)
+                                except Exception as retry_error:
+                                    if is_prompt_content_filter_error(retry_error):
+                                        debug_print(
+                                            "Prompt content filter persisted after disambiguation retry in streaming path; retrying with benign placeholders..."
+                                        )
+                                        placeholder_retry_stream_params = dict(stream_params)
+                                        placeholder_retry_stream_params['messages'] = add_allowlist_placeholder_mask_to_messages(
+                                            conversation_history_for_api,
+                                            content_safety_allowlist_matched_terms,
+                                        )
+                                        stream = gpt_client.chat.completions.create(**placeholder_retry_stream_params)
+                                    else:
+                                        raise
                             else:
                                 raise
                         

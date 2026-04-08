@@ -10,11 +10,11 @@ The app-level allowlist override only affected the Azure Content Safety gate. Th
 
 ## Version Implemented
 
-Fixed/Implemented in version: **0.240.069**
+Fixed/Implemented in version: **0.240.070**
 
 Related config version update:
 
-- `application/single_app/config.py` → `VERSION = "0.240.069"`
+- `application/single_app/config.py` → `VERSION = "0.240.070"`
 
 ## Technical Details
 
@@ -31,6 +31,10 @@ Related config version update:
   - allowlist override matched terms exist, and
   - Azure OpenAI returns prompt `content_filter` error.
 - Added the same one-retry behavior for streaming GPT request creation.
+- Added a second fallback retry for both paths when disambiguation retry still fails:
+  - masks matched allowlist terms in the final user message with neutral placeholders,
+  - prepends a moderation fallback system note,
+  - retries once more while still honoring Azure OpenAI safety policies.
 
 ### Safety Constraints
 
@@ -50,4 +54,4 @@ Related config version update:
 ### Before/After Comparison
 
 - **Before**: allowlisted false positives could still fail with Azure OpenAI prompt content filter 400 after Content Safety bypass.
-- **After**: app attempts one disambiguation-context retry for matched allowlist terms before failing.
+- **After**: app attempts a disambiguation-context retry, then a benign-placeholder retry for matched allowlist terms before failing.
