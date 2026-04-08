@@ -487,10 +487,10 @@ def register_route_frontend_admin_settings(app):
                 form_data.get('content_safety_false_positive_allowlist', '')
             )
             content_safety_false_positive_allowlist_categories = parse_admin_text_list(
-                form_data.get('content_safety_false_positive_allowlist_categories', 'Hate')
+                form_data.get('content_safety_false_positive_allowlist_categories', None)
             )
             if not content_safety_false_positive_allowlist_categories:
-                content_safety_false_positive_allowlist_categories = ['Hate']
+                content_safety_false_positive_allowlist_categories = []
 
             web_search_consent_message = (
                 "When you use Grounding with Bing Search, your customer data is transferred "

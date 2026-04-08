@@ -4560,6 +4560,7 @@
                                 name="content_safety_false_positive_allowlist"
                                 rows="3"
                             >{{ (settings.content_safety_false_positive_allowlist or []) | join('\n') }}</textarea>
+                            <small class="text-muted">Each term in list above must have its corresponding category in the allowed categories list below.</small>
                         </div>
 
                         <div class="mb-3">
@@ -4571,9 +4572,9 @@
                                 class="form-control"
                                 id="content_safety_false_positive_allowlist_categories"
                                 name="content_safety_false_positive_allowlist_categories"
-                                value="{{ (settings.content_safety_false_positive_allowlist_categories or ['Hate']) | join(', ') }}"
+                                value="{{ (settings.content_safety_false_positive_allowlist_categories or []) | join(', ') }}"
                             >
-                            <small class="text-muted">Default: Hate</small>
+                            <small class="text-muted">Valid values: Hate, SelfHarm, Sexual, Violence</small>
                         </div>
 
                         <button type="button" class="btn btn-secondary mt-3" id="test_safety_button">

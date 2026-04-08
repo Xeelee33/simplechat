@@ -192,16 +192,16 @@ def get_content_safety_allowlist_override(
 
     configured_categories = settings.get(
         'content_safety_false_positive_allowlist_categories',
-        ['Hate'],
+        [],
     )
     if not isinstance(configured_categories, list):
-        configured_categories = ['Hate']
+        configured_categories = []
 
     allowed_categories = {
         str(category).strip().lower() for category in configured_categories if str(category).strip()
     }
     if not allowed_categories:
-        allowed_categories = {'hate'}
+        allowed_categories = {}
 
     severe_categories = [
         category for category in (triggered_categories or [])
