@@ -94,6 +94,27 @@ def get_document_blob_storage_info(document_item, user_id=None, group_id=None, p
     )
 
 
+def _has_persisted_blob_reference(document_item):
+    if not document_item:
+        return False
+
+    if document_item.get("blob_path"):
+        return True
+
+    return (
+        document_item.get("blob_path_mode") == ARCHIVED_REVISION_BLOB_PATH_MODE
+        and bool(document_item.get("archived_blob_path"))
+    )
+
+
+def _normalize_document_enhanced_citations(document_item):
+    if not document_item:
+        return document_item
+
+    document_item["enhanced_citations"] = _has_persisted_blob_reference(document_item)
+    return document_item
+
+
 def get_document_blob_delete_targets(document_item, user_id=None, group_id=None, public_workspace_id=None):
     targets = []
     seen = set()
@@ -317,7 +338,9 @@ def select_current_documents(documents):
 
     current_documents = []
     for family_documents in families.values():
-        current_documents.append(_choose_current_document(family_documents))
+        current_documents.append(
+            _normalize_document_enhanced_citations(_choose_current_document(family_documents))
+        )
 
     return current_documents
 
@@ -666,6 +689,7 @@ def create_document(file_name, user_id, document_id, num_file_chunks, status, gr
                 "status": status,
                 "percentage_complete": 0,
                 "document_classification": carried_forward.get("document_classification", "None"),
+                "enhanced_citations": False,
                 "type": "document_metadata",
                 "public_workspace_id": public_workspace_id,
                 "user_id": user_id,
@@ -697,6 +721,7 @@ def create_document(file_name, user_id, document_id, num_file_chunks, status, gr
                 "status": status,
                 "percentage_complete": 0,
                 "document_classification": carried_forward.get("document_classification", "None"),
+                "enhanced_citations": False,
                 "type": "document_metadata",
                 "group_id": group_id,
                 "blob_container": _get_blob_container_name(group_id=group_id),
@@ -728,6 +753,7 @@ def create_document(file_name, user_id, document_id, num_file_chunks, status, gr
                 "status": status,
                 "percentage_complete": 0,
                 "document_classification": carried_forward.get("document_classification", "None"),
+                "enhanced_citations": False,
                 "type": "document_metadata",
                 "user_id": user_id,
                 "blob_container": _get_blob_container_name(),
@@ -823,7 +849,7 @@ def get_document_metadata(document_id, user_id, group_id=None, public_workspace_
             user_id=public_workspace_id if is_public_workspace else (group_id if is_group else user_id),
             content=f"Document metadata retrieved: {document_items}."
         )
-        return document_items[0] if document_items else None
+        return _normalize_document_enhanced_citations(document_items[0]) if document_items else None
 
     except Exception as e:
         print(f"Error retrieving document metadata: {repr(e)}\nTraceback:\n{traceback.format_exc()}")
@@ -2775,7 +2801,7 @@ def get_document(user_id, document_id, group_id=None, public_workspace_id=None):
         if not document_results:
             return jsonify({'error': 'Document not found or access denied'}), 404
 
-        return jsonify(document_results[0]), 200
+        return jsonify(_normalize_document_enhanced_citations(document_results[0])), 200
 
     except Exception as e:
         return jsonify({'error': f'Error retrieving document: {str(e)}'}), 500
@@ -2863,7 +2889,7 @@ def get_document_version(user_id, document_id, version, group_id=None, public_wo
         if not document_results:
             return jsonify({'error': 'Document version not found'}), 404
 
-        return jsonify(document_results[0]), 200
+        return jsonify(_normalize_document_enhanced_citations(document_results[0])), 200
 
     except Exception as e:
         return jsonify({'error': f'Error retrieving document version: {str(e)}'}), 500
@@ -4158,6 +4184,7 @@ def upload_to_blob(temp_file_path, user_id, document_id, blob_filename, update_c
         current_document["blob_container"] = storage_account_container_name
         current_document["blob_path"] = blob_path
         current_document["blob_path_mode"] = CURRENT_ALIAS_BLOB_PATH_MODE
+        current_document["enhanced_citations"] = True
         if current_document.get("archived_blob_path") is None:
             current_document["archived_blob_path"] = None
         cosmos_container.upsert_item(current_document)
@@ -4535,7 +4562,7 @@ def process_log(document_id, user_id, temp_file_path, original_filename, enable_
 
 def process_doc(document_id, user_id, temp_file_path, original_filename, enable_enhanced_citations, update_callback, group_id=None, public_workspace_id=None):
     """
-    Processes .doc and .docm files using docx2txt library.
+    Processes legacy .doc files via OLE piece tables and .docm files via docx2txt.
     Note: .docx files still use Document Intelligence for better formatting preservation.
     """
     is_group = group_id is not None
@@ -4543,8 +4570,11 @@ def process_doc(document_id, user_id, temp_file_path, original_filename, enable_
 
     update_callback(status=f"Processing {original_filename.split('.')[-1].upper()} file...")
     total_chunks_saved = 0
+    total_embedding_tokens = 0
+    embedding_model_name = None
     chunk_config = get_chunk_size_config(get_settings())
-    target_words_per_chunk = chunk_config.get('doc', {}).get('value', 400)  # Consistent with other text-based chunking
+    file_ext = os.path.splitext(original_filename)[1].lower().lstrip('.')
+    target_words_per_chunk = chunk_config.get(file_ext, {}).get('value', 400)
 
     if enable_enhanced_citations:
         args = {
@@ -4563,15 +4593,8 @@ def process_doc(document_id, user_id, temp_file_path, original_filename, enable_
         upload_to_blob(**args)
 
     try:
-        # Import docx2txt here to avoid dependency issues if not installed
         try:
-            import docx2txt
-        except ImportError:
-            raise Exception("docx2txt library is required for .doc and .docm file processing. Install with: pip install docx2txt")
-
-        # Extract text from .doc or .docm file
-        try:
-            text_content = docx2txt.process(temp_file_path)
+            text_content = extract_word_text(temp_file_path, f'.{file_ext}')
         except Exception as e:
             raise Exception(f"Error extracting text from {original_filename}: {e}")
 
@@ -4893,7 +4916,7 @@ def process_log(document_id, user_id, temp_file_path, original_filename, enable_
 
 def process_doc(document_id, user_id, temp_file_path, original_filename, enable_enhanced_citations, update_callback, group_id=None, public_workspace_id=None):
     """
-    Processes .doc and .docm files using docx2txt library.
+    Processes legacy .doc files via OLE piece tables and .docm files via docx2txt.
     Note: .docx files still use Document Intelligence for better formatting preservation.
     """
     is_group = group_id is not None
@@ -4901,7 +4924,11 @@ def process_doc(document_id, user_id, temp_file_path, original_filename, enable_
 
     update_callback(status=f"Processing {original_filename.split('.')[-1].upper()} file...")
     total_chunks_saved = 0
-    target_words_per_chunk = 400  # Consistent with other text-based chunking
+    total_embedding_tokens = 0
+    embedding_model_name = None
+    chunk_config = get_chunk_size_config(get_settings())
+    file_ext = os.path.splitext(original_filename)[1].lower().lstrip('.')
+    target_words_per_chunk = chunk_config.get(file_ext, {}).get('value', 400)
 
     if enable_enhanced_citations:
         args = {
@@ -4920,15 +4947,8 @@ def process_doc(document_id, user_id, temp_file_path, original_filename, enable_
         upload_to_blob(**args)
 
     try:
-        # Import docx2txt here to avoid dependency issues if not installed
         try:
-            import docx2txt
-        except ImportError:
-            raise Exception("docx2txt library is required for .doc and .docm file processing. Install with: pip install docx2txt")
-
-        # Extract text from .doc or .docm file
-        try:
-            text_content = docx2txt.process(temp_file_path)
+            text_content = extract_word_text(temp_file_path, f'.{file_ext}')
         except Exception as e:
             raise Exception(f"Error extracting text from {original_filename}: {e}")
 
@@ -4969,13 +4989,18 @@ def process_doc(document_id, user_id, temp_file_path, original_filename, enable_
                 elif is_group:
                     args["group_id"] = group_id
 
-                save_chunks(**args)
+                token_usage = save_chunks(**args)
                 total_chunks_saved += 1
+
+                if token_usage:
+                    total_embedding_tokens += token_usage.get('total_tokens', 0)
+                    if not embedding_model_name:
+                        embedding_model_name = token_usage.get('model_deployment_name')
 
     except Exception as e:
         raise Exception(f"Failed processing {original_filename}: {e}")
 
-    return total_chunks_saved
+    return total_chunks_saved, total_embedding_tokens, embedding_model_name
 
 def process_html(document_id, user_id, temp_file_path, original_filename, enable_enhanced_citations, update_callback, group_id=None, public_workspace_id=None):
     """Processes HTML files."""
@@ -5851,8 +5876,10 @@ def process_di_document(document_id, user_id, temp_file_path, original_filename,
     page_count = 0 # For PDF pre-check
 
     is_pdf = file_ext == '.pdf'
-    is_word = file_ext in ('.docx', '.doc')
+    is_word = file_ext in ('.docx', '.doc', '.docm')
+    is_legacy_doc = file_ext == '.doc'
     is_ppt = file_ext in ('.pptx', '.ppt')
+    is_legacy_ppt = file_ext == '.ppt'
     is_image = file_ext in tuple('.' + ext for ext in IMAGE_EXTENSIONS)
 
     try:
@@ -5861,9 +5888,11 @@ def process_di_document(document_id, user_id, temp_file_path, original_filename,
             doc_authors_list = parse_authors(doc_author)
             page_count = get_pdf_page_count(temp_file_path)
         elif is_word:
-            doc_title, doc_author = extract_docx_metadata(temp_file_path)
+            doc_title, doc_author = extract_word_metadata(temp_file_path, file_ext)
             doc_authors_list = parse_authors(doc_author)
-        # PPT and Image metadata extraction might be added here if needed/possible
+        elif is_ppt:
+            doc_title, doc_author, doc_subject, doc_keywords = extract_presentation_metadata(temp_file_path, file_ext)
+            doc_authors_list = parse_authors(doc_author)
 
         update_fields = {'status': "Extracted initial metadata"}
         if doc_title: update_fields['title'] = doc_title
@@ -5940,27 +5969,51 @@ def process_di_document(document_id, user_id, temp_file_path, original_filename,
 
             upload_to_blob(**args)
 
-        # Send chunk to Azure DI
-        update_callback(status=f"Sending {chunk_effective_filename} to Azure Document Intelligence...")
         di_extracted_pages = []
-        try:
-            di_extracted_pages = extract_content_with_azure_di(chunk_path)
-            num_di_pages = len(di_extracted_pages)
-            conceptual_pages = num_di_pages if not is_image else 1 # Image is one conceptual item
+        if is_legacy_doc:
+            update_callback(status=f"Extracting legacy Word content from {chunk_effective_filename}...")
+            try:
+                extracted_text = extract_word_text(chunk_path, file_ext)
+                if extracted_text and extracted_text.strip():
+                    di_extracted_pages = [{
+                        "page_number": 1,
+                        "content": extracted_text,
+                    }]
+                    update_callback(number_of_pages=1, status=f"Extracted legacy Word content from {chunk_effective_filename}.")
+                else:
+                    print(f"Warning: Legacy Word extractor returned no content for {chunk_effective_filename}.")
+                    update_callback(number_of_pages=0, status=f"Legacy Word extractor found no content in {chunk_effective_filename}.")
+            except Exception as e:
+                raise Exception(f"Error extracting content from {chunk_effective_filename} with the legacy Word extractor: {str(e)}")
+        elif is_legacy_ppt:
+            update_callback(status=f"Extracting legacy PowerPoint content from {chunk_effective_filename}...")
+            try:
+                di_extracted_pages = extract_legacy_ppt_pages(chunk_path)
+                total_slides = len(di_extracted_pages)
+                update_callback(number_of_pages=total_slides, status=f"Extracted legacy PowerPoint content from {chunk_effective_filename}.")
+            except Exception as e:
+                raise Exception(f"Error extracting content from {chunk_effective_filename} with the legacy PowerPoint extractor: {str(e)}")
+        else:
+            # Send chunk to Azure DI
+            update_callback(status=f"Sending {chunk_effective_filename} to Azure Document Intelligence...")
+            try:
+                di_extracted_pages = extract_content_with_azure_di(chunk_path)
+                num_di_pages = len(di_extracted_pages)
+                conceptual_pages = num_di_pages if not is_image else 1 # Image is one conceptual item
 
-            if not di_extracted_pages and not is_image:
-                print(f"Warning: Azure DI returned no content pages for {chunk_effective_filename}.")
-                status_msg = f"Azure DI found no content in {chunk_effective_filename}."
-                # Update page count to 0 if nothing found, otherwise keep previous estimate or conceptual count
-                update_callback(number_of_pages=0 if idx == num_file_chunks else conceptual_pages, status=status_msg)
-            elif not di_extracted_pages and is_image:
-                print(f"Info: Azure DI processed image {chunk_effective_filename}, but extracted no text.")
-                update_callback(number_of_pages=conceptual_pages, status=f"Processed image {chunk_effective_filename} (no text found).")
-            else:
-                 update_callback(number_of_pages=conceptual_pages, status=f"Received {num_di_pages} content page(s)/slide(s) from Azure DI for {chunk_effective_filename}.")
+                if not di_extracted_pages and not is_image:
+                    print(f"Warning: Azure DI returned no content pages for {chunk_effective_filename}.")
+                    status_msg = f"Azure DI found no content in {chunk_effective_filename}."
+                    # Update page count to 0 if nothing found, otherwise keep previous estimate or conceptual count
+                    update_callback(number_of_pages=0 if idx == num_file_chunks else conceptual_pages, status=status_msg)
+                elif not di_extracted_pages and is_image:
+                    print(f"Info: Azure DI processed image {chunk_effective_filename}, but extracted no text.")
+                    update_callback(number_of_pages=conceptual_pages, status=f"Processed image {chunk_effective_filename} (no text found).")
+                else:
+                     update_callback(number_of_pages=conceptual_pages, status=f"Received {num_di_pages} content page(s)/slide(s) from Azure DI for {chunk_effective_filename}.")
 
-        except Exception as e:
-            raise Exception(f"Error extracting content from {chunk_effective_filename} with Azure DI: {str(e)}")
+            except Exception as e:
+                raise Exception(f"Error extracting content from {chunk_effective_filename} with Azure DI: {str(e)}")
 
         # --- Multi-Modal Vision Analysis (for images only) - Must happen BEFORE save_chunks ---
         if is_image and enable_enhanced_citations and idx == 1:  # Only run once for first chunk
@@ -6214,6 +6267,34 @@ def _get_speech_config(settings, endpoint: str, locale: str):
 
     speech_config.speech_recognition_language = locale
     print(f"[Debug] Speech config obtained successfully", flush=True)
+    return speech_config
+
+
+def get_speech_synthesis_config(settings, endpoint: str, location: str):
+    """Get speech synthesis config for either key or managed identity auth."""
+    auth_type = settings.get("speech_service_authentication_type")
+
+    if auth_type == "managed_identity":
+        resource_id = (settings.get("speech_service_resource_id") or "").strip()
+        if not location:
+            raise ValueError("Speech service location is required for text-to-speech with managed identity.")
+        if not resource_id:
+            raise ValueError("Speech service resource ID is required for text-to-speech with managed identity.")
+
+        credential = DefaultAzureCredential()
+        token = credential.get_token(cognitive_services_scope)
+        authorization_token = f"aad#{resource_id}#{token.token}"
+        speech_config = speechsdk.SpeechConfig(auth_token=authorization_token, region=location)
+    else:
+        key = (settings.get("speech_service_key") or "").strip()
+        if not endpoint:
+            raise ValueError("Speech service endpoint is required for text-to-speech.")
+        if not key:
+            raise ValueError("Speech service key is required for text-to-speech when using key authentication.")
+
+        speech_config = speechsdk.SpeechConfig(endpoint=endpoint, subscription=key)
+
+    print(f"[Debug] Speech synthesis config obtained successfully", flush=True)
     return speech_config
 
 def process_audio_document(
@@ -6553,7 +6634,7 @@ def process_document_upload_background(document_id, user_id, temp_file_path, ori
         update_doc_callback(status=f"Processing file {original_filename}, type: {file_ext}")
 
         # --- 1. Dispatch to appropriate handler based on file type ---
-        # Note: .doc and .docm are handled separately by process_doc() using docx2txt
+        # Note: .doc uses the shared document pipeline with OLE extraction, while .docm stays on the direct Word-text path.
 
         is_group = group_id is not None
 
@@ -6562,7 +6643,7 @@ def process_document_upload_background(document_id, user_id, temp_file_path, ori
             "user_id": user_id,
             "temp_file_path": temp_file_path,
             "original_filename": original_filename,
-            "file_ext": file_ext if file_ext in tabular_extensions or file_ext in di_supported_extensions else None,
+            "file_ext": file_ext if file_ext in tabular_extensions or file_ext in di_supported_extensions or file_ext == '.doc' else None,
             "enable_enhanced_citations": enable_enhanced_citations,
             "update_callback": update_doc_callback
         }
@@ -6597,7 +6678,7 @@ def process_document_upload_background(document_id, user_id, temp_file_path, ori
                 total_chunks_saved, total_embedding_tokens, embedding_model_name = result
             else:
                 total_chunks_saved = result
-        elif file_ext in ('.doc', '.docm'):
+        elif file_ext == '.docm':
             result = process_doc(**{k: v for k, v in args.items() if k != "file_ext"})
             if isinstance(result, tuple) and len(result) == 3:
                 total_chunks_saved, total_embedding_tokens, embedding_model_name = result
@@ -6647,7 +6728,7 @@ def process_document_upload_background(document_id, user_id, temp_file_path, ori
                 group_id=group_id,
                 public_workspace_id=public_workspace_id
             )
-        elif file_ext in di_supported_extensions:
+        elif file_ext in di_supported_extensions or file_ext == '.doc':
             result = process_di_document(**args)
             # Handle tuple return (chunks, tokens, model_name)
             if isinstance(result, tuple) and len(result) == 3:
@@ -6722,7 +6803,11 @@ def process_document_upload_background(document_id, user_id, temp_file_path, ori
                 embedding_tokens=total_embedding_tokens,
                 embedding_model=embedding_model_name,
                 version=doc_metadata.get('version') if doc_metadata else None,
-                author=doc_metadata.get('author') if doc_metadata else None,
+                author=(
+                    doc_metadata.get('author')
+                    or ', '.join(ensure_list(doc_metadata.get('authors')))
+                    or None
+                ) if doc_metadata else None,
                 title=doc_metadata.get('title') if doc_metadata else None,
                 subject=doc_metadata.get('subject') if doc_metadata else None,
                 publication_date=doc_metadata.get('publication_date') if doc_metadata else None,

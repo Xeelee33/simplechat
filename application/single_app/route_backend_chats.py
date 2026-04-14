@@ -13,7 +13,7 @@ from semantic_kernel_plugins.plugin_invocation_thoughts import (
     register_plugin_invocation_thought_callback,
 )
 from semantic_kernel_plugins.plugin_invocation_logger import get_plugin_logger
-from foundry_agent_runtime import FoundryAgentInvocationError, execute_foundry_agent, resolve_authority
+from foundry_agent_runtime import FoundryAgentInvocationError, execute_foundry_agent, resolve_authority, resolve_authority
 import builtins
 import asyncio, types
 import ast
@@ -35,6 +35,7 @@ from functions_settings import *
 from functions_agents import get_agent_id_by_name
 from functions_group import find_group_by_id, get_group_model_endpoints, get_user_role_in_group
 from functions_chat import *
+from functions_content import generate_embedding, generate_embeddings_batch
 from functions_conversation_metadata import collect_conversation_metadata, update_conversation_with_metadata
 from functions_conversation_unread import mark_conversation_unread
 from functions_debug import debug_print
@@ -49,6 +50,7 @@ from functions_message_artifacts import (
     build_message_artifact_payload_map,
     filter_assistant_artifact_items,
     hydrate_agent_citations_from_artifacts,
+    make_json_serializable,
 )
 from functions_thoughts import ThoughtTracker
 
@@ -67,6 +69,441 @@ def _strip_agent_citation_artifact_refs(agent_citations):
         compact_citations.append(compact_citation)
 
     return compact_citations
+
+
+FACT_MEMORY_TYPE_FACT = 'fact'
+FACT_MEMORY_TYPE_INSTRUCTION = 'instruction'
+FACT_MEMORY_TYPE_LEGACY_DESCRIBER = 'describer'
+
+
+def normalize_fact_memory_type(memory_type):
+    normalized = str(memory_type or '').strip().lower()
+    if normalized == FACT_MEMORY_TYPE_LEGACY_DESCRIBER:
+        return FACT_MEMORY_TYPE_FACT
+    if normalized in {FACT_MEMORY_TYPE_FACT, FACT_MEMORY_TYPE_INSTRUCTION}:
+        return normalized
+    return FACT_MEMORY_TYPE_FACT
+
+
+def _normalize_fact_memory_item(fact_item):
+    normalized_item = dict(fact_item or {})
+    normalized_item['memory_type'] = normalize_fact_memory_type(normalized_item.get('memory_type'))
+    normalized_item['value'] = str(normalized_item.get('value') or '').strip()
+    return normalized_item
+
+
+def _is_embedding_vector(candidate):
+    return (
+        isinstance(candidate, list)
+        and bool(candidate)
+        and all(isinstance(value, (int, float)) for value in candidate)
+    )
+
+
+def _coerce_embedding_result(embedding_result):
+    if not embedding_result:
+        return None, None
+    if isinstance(embedding_result, tuple):
+        return embedding_result[0], embedding_result[1]
+    return embedding_result, None
+
+
+def _build_fact_memory_fact_payload(matched_facts):
+    fact_payload = []
+    for fact in matched_facts or []:
+        fact_payload.append({
+            'id': fact.get('id'),
+            'value': fact.get('value'),
+            'memory_type': normalize_fact_memory_type(fact.get('memory_type')),
+            'updated_at': fact.get('updated_at') or fact.get('created_at'),
+            'conversation_id': fact.get('conversation_id'),
+            'agent_id': fact.get('agent_id'),
+            'similarity': fact.get('similarity'),
+        })
+    return fact_payload
+
+
+def _cosine_similarity(left_vector, right_vector):
+    if not _is_embedding_vector(left_vector) or not _is_embedding_vector(right_vector):
+        return 0.0
+    if len(left_vector) != len(right_vector):
+        return 0.0
+
+    left_norm = sum(value * value for value in left_vector) ** 0.5
+    right_norm = sum(value * value for value in right_vector) ** 0.5
+    if left_norm == 0 or right_norm == 0:
+        return 0.0
+
+    dot_product = sum(left * right for left, right in zip(left_vector, right_vector))
+    return float(dot_product / (left_norm * right_norm))
+
+
+def _backfill_missing_fact_memory_embeddings(fact_store, facts):
+    missing_items = []
+    for fact in facts or []:
+        if fact.get('memory_type') != FACT_MEMORY_TYPE_FACT:
+            continue
+        if _is_embedding_vector(fact.get('value_embedding')):
+            continue
+        value = str(fact.get('value') or '').strip()
+        if not value:
+            continue
+        missing_items.append((fact, value))
+
+    if not missing_items:
+        return 0
+
+    try:
+        embedding_results = generate_embeddings_batch([value for _, value in missing_items])
+    except Exception as exc:
+        debug_print(f"[Fact Memory] Failed to backfill memory embeddings: {exc}")
+        return 0
+
+    updated_count = 0
+    for (fact, _), embedding_result in zip(missing_items, embedding_results):
+        embedding_vector, token_usage = _coerce_embedding_result(embedding_result)
+        if not embedding_vector:
+            continue
+
+        updated_fact = fact_store.update_fact_embedding(
+            scope_id=fact.get('scope_id'),
+            fact_id=fact.get('id'),
+            value_embedding=embedding_vector,
+            embedding_model=(token_usage or {}).get('model_deployment_name') if isinstance(token_usage, dict) else None,
+        )
+        if updated_fact:
+            fact.update(updated_fact)
+        else:
+            fact['value_embedding'] = embedding_vector
+        updated_count += 1
+
+    return updated_count
+
+
+def build_instruction_memory_citation(applied_facts):
+    fact_payload = _build_fact_memory_fact_payload(applied_facts)
+    return {
+        'tool_name': 'Instruction Memory',
+        'function_name': 'apply_instructions',
+        'plugin_name': 'fact_memory',
+        'function_arguments': make_json_serializable({
+            'memory_type': FACT_MEMORY_TYPE_INSTRUCTION,
+            'applied_count': len(fact_payload),
+        }),
+        'function_result': make_json_serializable({
+            'facts': fact_payload,
+        }),
+        'timestamp': datetime.utcnow().isoformat(),
+        'success': True,
+    }
+
+
+def build_fact_memory_citation(query_text, matched_facts, search_mode):
+    fact_payload = _build_fact_memory_fact_payload(matched_facts)
+    return {
+        'tool_name': 'Fact Memory Recall',
+        'function_name': 'search_facts',
+        'plugin_name': 'fact_memory',
+        'function_arguments': make_json_serializable({
+            'query': str(query_text or '').strip(),
+            'search_mode': search_mode,
+            'match_count': len(fact_payload),
+            'memory_type': FACT_MEMORY_TYPE_FACT,
+        }),
+        'function_result': make_json_serializable({
+            'facts': fact_payload,
+        }),
+        'timestamp': datetime.utcnow().isoformat(),
+        'success': True,
+    }
+
+
+def build_instruction_memory_payload(
+    scope_id,
+    scope_type,
+    enabled=True,
+    result_limit=8,
+):
+    payload = {
+        'context_messages': [],
+        'citation': None,
+        'thought_content': None,
+        'thought_detail': None,
+        'matched_facts': [],
+        'total_available': 0,
+    }
+    if not enabled or not scope_id or not scope_type:
+        return payload
+
+    fact_store = FactMemoryStore()
+    instruction_facts = [
+        _normalize_fact_memory_item(fact)
+        for fact in fact_store.list_facts(
+            scope_type=scope_type,
+            scope_id=scope_id,
+            memory_type=FACT_MEMORY_TYPE_INSTRUCTION,
+        )
+    ]
+    payload['total_available'] = len(instruction_facts)
+
+    applied_facts = []
+    for fact in instruction_facts:
+        if not fact.get('value'):
+            continue
+        applied_facts.append(fact)
+        if len(applied_facts) >= max(1, int(result_limit or 8)):
+            break
+
+    if not applied_facts:
+        return payload
+
+    instruction_lines = [f"- {fact.get('value')}" for fact in applied_facts]
+    instruction_block = "\n".join(instruction_lines)
+    payload['matched_facts'] = applied_facts
+    payload['context_messages'].append({
+        'role': 'system',
+        'content': (
+            'Apply these saved user instruction memories to every response in this conversation. '
+            'Treat them like durable user-specific response preferences unless the user overrides them in the current message.\n'
+            f"<Instruction Memory>\n{instruction_block}\n</Instruction Memory>"
+        )
+    })
+    payload['citation'] = build_instruction_memory_citation(applied_facts)
+    payload['thought_content'] = (
+        f"Applied {len(applied_facts)} instruction "
+        f"{'memory' if len(applied_facts) == 1 else 'memories'}"
+    )
+    payload['thought_detail'] = ' | '.join(
+        str(fact.get('value') or '').strip()[:80]
+        for fact in applied_facts[:3]
+        if str(fact.get('value') or '').strip()
+    )
+    return payload
+
+
+def retrieve_relevant_fact_memory_entries(
+    scope_id,
+    scope_type,
+    query_text=None,
+    conversation_id=None,
+    agent_id=None,
+    enabled=True,
+    result_limit=4,
+):
+    result = {
+        'matched_facts': [],
+        'search_mode': 'disabled',
+        'total_available': 0,
+        'query_text': str(query_text or '').strip(),
+        'embedding_backfill_count': 0,
+    }
+    if not enabled or not scope_id or not scope_type:
+        return result
+
+    query_text = result['query_text']
+    if not query_text:
+        result['search_mode'] = 'missing_query'
+        return result
+
+    fact_store = FactMemoryStore()
+    query_kwargs = {
+        'scope_type': scope_type,
+        'scope_id': scope_id,
+            'memory_type': FACT_MEMORY_TYPE_FACT,
+    }
+    if conversation_id:
+        query_kwargs['conversation_id'] = conversation_id
+    if agent_id:
+        query_kwargs['agent_id'] = agent_id
+
+    facts = [
+        _normalize_fact_memory_item(fact)
+        for fact in fact_store.list_facts(**query_kwargs)
+    ]
+    result['total_available'] = len(facts)
+    if not facts:
+        result['search_mode'] = 'empty'
+        return result
+
+    result['embedding_backfill_count'] = _backfill_missing_fact_memory_embeddings(fact_store, facts)
+
+    try:
+        query_embedding_result = generate_embedding(query_text)
+    except Exception as exc:
+        debug_print(f"[Fact Memory] Failed to generate query embedding: {exc}")
+        result['search_mode'] = 'embedding_unavailable'
+        return result
+
+    query_embedding, _ = _coerce_embedding_result(query_embedding_result)
+    if not query_embedding:
+        result['search_mode'] = 'embedding_unavailable'
+        return result
+
+    candidates = []
+    for fact in facts:
+        value = str(fact.get('value') or '').strip()
+        embedding_vector = fact.get('value_embedding')
+        if not value or not _is_embedding_vector(embedding_vector):
+            continue
+
+        similarity = _cosine_similarity(query_embedding, embedding_vector)
+        if similarity <= 0:
+            continue
+
+        normalized_fact = dict(fact)
+        normalized_fact['similarity'] = round(similarity, 6)
+        candidates.append(normalized_fact)
+
+    if not candidates:
+        result['search_mode'] = 'embedding'
+        return result
+
+    candidates.sort(
+        key=lambda fact: (
+            float(fact.get('similarity') or 0.0),
+            str(fact.get('updated_at') or fact.get('created_at') or ''),
+        ),
+        reverse=True,
+    )
+    safe_limit = max(1, int(result_limit or 4))
+    result['matched_facts'] = candidates[:safe_limit]
+    result['search_mode'] = 'embedding'
+    return result
+
+
+def build_fact_memory_recall_payload(
+    scope_id,
+    scope_type,
+    query_text=None,
+    conversation_id=None,
+    agent_id=None,
+    enabled=True,
+    include_metadata=False,
+    result_limit=4,
+):
+    retrieval = retrieve_relevant_fact_memory_entries(
+        scope_id=scope_id,
+        scope_type=scope_type,
+        query_text=query_text,
+        conversation_id=conversation_id,
+        agent_id=agent_id,
+        enabled=enabled,
+        result_limit=result_limit,
+    )
+
+    payload = {
+        'context_messages': [],
+        'citation': None,
+        'thought_content': None,
+        'thought_detail': None,
+        **retrieval,
+    }
+    matched_facts = retrieval.get('matched_facts', [])
+
+    if not matched_facts:
+        if retrieval.get('total_available', 0) > 0 and enabled:
+            payload['thought_content'] = 'Fact memory search found no relevant facts'
+            payload['thought_detail'] = (
+                f"mode={retrieval.get('search_mode', 'embedding')}; "
+                f"query={str(query_text or '').strip()[:80]}; "
+                f"available={retrieval.get('total_available', 0)}"
+            )
+        return payload
+
+    if include_metadata:
+        payload['context_messages'].append({
+            'role': 'system',
+            'content': (
+                f"<Conversation Metadata>\n<Scope ID: {scope_id}>\n<Scope Type: {scope_type}>\n"
+                f"<Conversation ID: {conversation_id}>\n<Agent ID: {agent_id}>\n</Conversation Metadata>"
+            )
+        })
+
+    fact_lines = [f"- {fact.get('value')}" for fact in matched_facts if fact.get('value')]
+    if fact_lines:
+        fact_block = "\n".join(fact_lines)
+        payload['context_messages'].append({
+            'role': 'system',
+            'content': (
+                'Retrieved saved facts relevant to the current request. '
+                'Use them only when they directly help answer the user.\n'
+                f"<Fact Memory>\n{fact_block}\n</Fact Memory>"
+            )
+        })
+
+    fact_preview = ' | '.join(
+        str(fact.get('value') or '').strip()[:80]
+        for fact in matched_facts[:3]
+        if str(fact.get('value') or '').strip()
+    )
+    payload['citation'] = build_fact_memory_citation(
+        query_text=query_text,
+        matched_facts=matched_facts,
+        search_mode=retrieval.get('search_mode', 'embedding'),
+    )
+    payload['thought_content'] = (
+        f"Fact memory search found {len(matched_facts)} relevant "
+        f"{'fact' if len(matched_facts) == 1 else 'facts'}"
+    )
+    payload['thought_detail'] = (
+        f"mode={retrieval.get('search_mode', 'embedding')}; "
+        f"query={str(query_text or '').strip()[:80]}; "
+        f"matched={len(matched_facts)} of {retrieval.get('total_available', 0)}; "
+        f"values={fact_preview}"
+    )
+    return payload
+
+
+def build_fact_memory_prompt_payload(
+    scope_id,
+    scope_type,
+    query_text=None,
+    conversation_id=None,
+    agent_id=None,
+    enabled=True,
+    include_metadata=False,
+    instruction_limit=8,
+    fact_limit=4,
+):
+    instruction_payload = build_instruction_memory_payload(
+        scope_id=scope_id,
+        scope_type=scope_type,
+        enabled=enabled,
+        result_limit=instruction_limit,
+    )
+    recall_payload = build_fact_memory_recall_payload(
+        scope_id=scope_id,
+        scope_type=scope_type,
+        query_text=query_text,
+        conversation_id=conversation_id,
+        agent_id=agent_id,
+        enabled=enabled,
+        include_metadata=include_metadata,
+        result_limit=fact_limit,
+    )
+
+    context_messages = []
+    thoughts = []
+    citations = []
+
+    for payload in (instruction_payload, recall_payload):
+        context_messages.extend(payload.get('context_messages', []))
+        if payload.get('thought_content'):
+            thoughts.append({
+                'step_type': 'fact_memory',
+                'content': payload['thought_content'],
+                'detail': payload.get('thought_detail'),
+            })
+        if payload.get('citation'):
+            citations.append(payload['citation'])
+
+    return {
+        'context_messages': context_messages,
+        'thoughts': thoughts,
+        'citations': citations,
+        'instruction_payload': instruction_payload,
+        'recall_payload': recall_payload,
+    }
 
 
 def persist_agent_citation_artifacts(
@@ -105,6 +542,163 @@ def persist_agent_citation_artifacts(
             exceptionTraceback=True,
         )
         return _strip_agent_citation_artifact_refs(compact_citations)
+
+
+def _load_user_message_response_context(
+    conversation_id,
+    user_message_id,
+    fallback_thread_id=None,
+    fallback_previous_thread_id=None,
+):
+    """Return user/thread metadata for assistant-style responses."""
+    response_context = {
+        'user_info': None,
+        'thread_id': fallback_thread_id,
+        'previous_thread_id': fallback_previous_thread_id,
+    }
+
+    try:
+        user_message_doc = cosmos_messages_container.read_item(
+            item=user_message_id,
+            partition_key=conversation_id,
+        )
+        metadata = user_message_doc.get('metadata') or {}
+        thread_info = metadata.get('thread_info') or {}
+
+        response_context['user_info'] = metadata.get('user_info')
+        response_context['thread_id'] = thread_info.get('thread_id') or fallback_thread_id
+
+        if 'previous_thread_id' in thread_info:
+            response_context['previous_thread_id'] = thread_info.get('previous_thread_id')
+    except Exception as exc:
+        debug_print(
+            f"[Threading] Could not load response context for user message {user_message_id}: {exc}"
+        )
+
+    return response_context
+
+
+def _initialize_assistant_response_tracking(
+    conversation_id,
+    user_message_id,
+    current_user_thread_id,
+    previous_thread_id,
+    retry_thread_attempt,
+    is_retry,
+    user_id,
+):
+    """Create assistant response tracking state for both new and retry/edit flows."""
+    assistant_message_id = f"{conversation_id}_assistant_{int(time.time())}_{random.randint(1000,9999)}"
+    thought_tracker = ThoughtTracker(
+        conversation_id=conversation_id,
+        message_id=assistant_message_id,
+        thread_id=current_user_thread_id,
+        user_id=user_id,
+    )
+    assistant_thread_attempt = retry_thread_attempt if is_retry and retry_thread_attempt is not None else 1
+    response_message_context = _load_user_message_response_context(
+        conversation_id=conversation_id,
+        user_message_id=user_message_id,
+        fallback_thread_id=current_user_thread_id,
+        fallback_previous_thread_id=previous_thread_id,
+    )
+    return assistant_message_id, thought_tracker, assistant_thread_attempt, response_message_context
+
+
+def _build_safety_message_doc(
+    conversation_id,
+    message_id,
+    content,
+    response_context,
+    thread_attempt,
+):
+    """Build a persisted safety message aligned with the active conversation thread."""
+    return make_json_serializable({
+        'id': message_id,
+        'conversation_id': conversation_id,
+        'role': 'safety',
+        'content': content,
+        'timestamp': datetime.utcnow().isoformat(),
+        'model_deployment_name': None,
+        'metadata': {
+            'user_info': response_context.get('user_info'),
+            'thread_info': {
+                'thread_id': response_context.get('thread_id'),
+                'previous_thread_id': response_context.get('previous_thread_id'),
+                'active_thread': True,
+                'thread_attempt': thread_attempt,
+            },
+        },
+    })
+
+
+def _build_fact_memory_context_lines(
+    scope_id,
+    scope_type,
+    query_text=None,
+    conversation_id=None,
+    agent_id=None,
+    enabled=True,
+    result_limit=4,
+):
+    """Build a flat fact-memory context block for the current scope."""
+    prompt_payload = build_fact_memory_prompt_payload(
+        scope_id=scope_id,
+        scope_type=scope_type,
+        query_text=query_text,
+        conversation_id=conversation_id,
+        agent_id=agent_id,
+        enabled=enabled,
+        include_metadata=False,
+        instruction_limit=8,
+        fact_limit=result_limit,
+    )
+
+    fact_lines = []
+    instruction_facts = prompt_payload.get('instruction_payload', {}).get('matched_facts', [])
+    if instruction_facts:
+        fact_lines.append('[Instruction Memory]')
+        fact_lines.extend(
+            f"- {fact.get('value')}"
+            for fact in instruction_facts
+            if fact.get('value')
+        )
+
+    fact_memories = prompt_payload.get('recall_payload', {}).get('matched_facts', [])
+    if fact_memories:
+        if fact_lines:
+            fact_lines.append('')
+        fact_lines.append('[Fact Memory]')
+        fact_lines.extend(
+            f"- {fact.get('value')}"
+            for fact in fact_memories
+            if fact.get('value')
+        )
+
+    if not fact_lines:
+        return ""
+    return "\n".join(fact_lines)
+
+
+def build_tabular_fact_memory_messages(
+    scope_id,
+    scope_type,
+    query_text=None,
+    conversation_id=None,
+    agent_id=None,
+    enabled=True,
+):
+    """Return system-message payloads that expose fact memory to mini SK analysis."""
+    prompt_payload = build_fact_memory_prompt_payload(
+        scope_id=scope_id,
+        scope_type=scope_type,
+        query_text=query_text,
+        conversation_id=conversation_id,
+        agent_id=agent_id,
+        enabled=enabled,
+        include_metadata=True,
+    )
+    return prompt_payload.get('context_messages', [])
 
 
 def get_tabular_discovery_function_names():
@@ -3296,12 +3890,95 @@ def is_tabular_access_limited_analysis(analysis_text):
         'do not have direct access',
         "don't have",
         'do not have',
+        "doesn't include the full",
+        'does not include the full',
+        'only sample rows',
+        'only workbook metadata',
+        'only sample rows and workbook metadata',
+        'cannot accurately list all',
+        'cannot accurately list them',
+        'from the current evidence',
+        'from the evidence provided',
         'visible excerpt you provided',
         'if those tool-backed results exist',
         'allow me to query again',
         'can outline what i would retrieve',
     )
     return any(phrase in normalized_analysis for phrase in inaccessible_phrases)
+
+
+def get_tabular_result_coverage_summary(invocations):
+    """Return whether successful analytical tool calls produced full or partial result coverage."""
+    coverage_summary = {
+        'has_full_result_coverage': False,
+        'has_partial_result_coverage': False,
+    }
+
+    for invocation in invocations or []:
+        result_payload = get_tabular_invocation_result_payload(invocation) or {}
+
+        total_matches = parse_tabular_result_count(result_payload.get('total_matches'))
+        returned_rows = parse_tabular_result_count(result_payload.get('returned_rows'))
+        if total_matches is not None and returned_rows is not None:
+            if returned_rows >= total_matches:
+                coverage_summary['has_full_result_coverage'] = True
+            else:
+                coverage_summary['has_partial_result_coverage'] = True
+
+        distinct_count = parse_tabular_result_count(result_payload.get('distinct_count'))
+        returned_values = parse_tabular_result_count(result_payload.get('returned_values'))
+        if distinct_count is not None and returned_values is not None:
+            if returned_values >= distinct_count:
+                coverage_summary['has_full_result_coverage'] = True
+            else:
+                coverage_summary['has_partial_result_coverage'] = True
+
+        if result_payload.get('full_rows_included') or result_payload.get('full_values_included'):
+            coverage_summary['has_full_result_coverage'] = True
+        if result_payload.get('sample_rows_limited') or result_payload.get('values_limited'):
+            coverage_summary['has_partial_result_coverage'] = True
+
+        if (
+            coverage_summary['has_full_result_coverage']
+            and coverage_summary['has_partial_result_coverage']
+        ):
+            break
+
+    return coverage_summary
+
+
+def build_tabular_success_execution_gap_messages(user_question, analysis_text, invocations):
+    """Return retry guidance when a successful tabular analysis still produced an incomplete answer."""
+    coverage_summary = get_tabular_result_coverage_summary(invocations)
+    has_full_result_coverage = coverage_summary['has_full_result_coverage']
+    has_partial_result_coverage = coverage_summary['has_partial_result_coverage']
+    wants_exhaustive_results = question_requests_tabular_exhaustive_results(user_question)
+    execution_gap_messages = []
+
+    if is_tabular_access_limited_analysis(analysis_text):
+        if wants_exhaustive_results and has_full_result_coverage:
+            execution_gap_messages.append(
+                'Previous attempt still claimed only sample rows or workbook metadata were available even though successful analytical tool calls returned the full matching result set. Answer directly from those returned rows and list the full results the user asked for.'
+            )
+        elif has_full_result_coverage:
+            execution_gap_messages.append(
+                'Previous attempt still claimed the requested data was unavailable even though successful analytical tool calls returned the full matching result set. Use the returned rows and answer directly.'
+            )
+        else:
+            execution_gap_messages.append(
+                'Previous attempt still claimed the requested data was unavailable even though analytical tool calls succeeded. Use the returned rows and answer directly.'
+            )
+
+    if (
+        wants_exhaustive_results
+        and has_partial_result_coverage
+        and not has_full_result_coverage
+    ):
+        execution_gap_messages.append(
+            'The user asked for a full list, but previous analytical calls returned only a partial slice. Rerun the relevant analytical call with a higher max_rows or max_values before answering.'
+        )
+
+    return execution_gap_messages
 
 
 def _select_likely_workbook_sheet(sheet_names, question_text, per_sheet=None, score_match_fn=None):
@@ -3348,6 +4025,7 @@ async def run_tabular_sk_analysis(user_question, tabular_filenames, user_id,
     from semantic_kernel.connectors.ai.function_choice_behavior import FunctionChoiceBehavior
     from semantic_kernel.connectors.ai.open_ai.prompt_execution_settings.azure_chat_prompt_execution_settings import AzureChatPromptExecutionSettings
     from semantic_kernel.contents.chat_history import ChatHistory as SKChatHistory
+    from semantic_kernel_plugins.fact_memory_plugin import FactMemoryPlugin
     from semantic_kernel_plugins.tabular_processing_plugin import TabularProcessingPlugin
 
     try:
@@ -3355,6 +4033,9 @@ async def run_tabular_sk_analysis(user_question, tabular_filenames, user_id,
         execution_mode = execution_mode if execution_mode in {'analysis', 'schema_summary', 'entity_lookup'} else 'analysis'
         schema_summary_mode = execution_mode == 'schema_summary'
         entity_lookup_mode = execution_mode == 'entity_lookup'
+        fact_memory_enabled = bool(settings.get('enable_fact_memory_plugin', False))
+        fact_memory_scope_id = group_id or user_id
+        fact_memory_scope_type = 'group' if group_id else 'user'
         analysis_file_contexts = normalize_tabular_file_contexts_for_analysis(
             tabular_filenames=tabular_filenames,
             tabular_file_contexts=tabular_file_contexts,
@@ -3372,6 +4053,8 @@ async def run_tabular_sk_analysis(user_question, tabular_filenames, user_id,
         kernel = SKKernel()
         tabular_plugin = TabularProcessingPlugin()
         kernel.add_plugin(tabular_plugin, plugin_name="tabular_processing")
+        if fact_memory_enabled:
+            kernel.add_plugin(FactMemoryPlugin(), plugin_name="fact_memory")
 
         # 2. Create chat service using same config as main chat
         enable_gpt_apim = settings.get('enable_gpt_apim', False)
@@ -3808,7 +4491,8 @@ async def run_tabular_sk_analysis(user_question, tabular_filenames, user_id,
                     "12. Summarize concrete found records sheet-by-sheet using the tool results, not schema placeholders.\n"
                     "13. For count or percentage questions involving a cohort defined on one sheet and facts on another, prefer get_distinct_values, count_rows, filter_rows_by_related_values, or count_rows_by_related_values over manually counting sampled rows.\n"
                     "14. Use normalize_match=true when matching names, owners, assignees, engineers, or similar entity-text columns across worksheets.\n"
-                    "15. Do not mention hypothetical follow-up analyses, parser errors, or failed attempts unless the user explicitly asked about failures and you have actual tool error output to report."
+                    "15. If a successful tool result reports returned_rows == total_matches or returned_values == distinct_count, treat that as the full matching result set. Do not claim that only sample rows or workbook metadata are available in that case.\n"
+                    "16. Do not mention hypothetical follow-up analyses, parser errors, or failed attempts unless the user explicitly asked about failures and you have actual tool error output to report."
                 )
 
             return (
@@ -3861,8 +4545,9 @@ async def run_tabular_sk_analysis(user_question, tabular_filenames, user_id,
                 "22. For identifier-based workbook questions, locate the identifier on the correct sheet before explaining downstream calculations.\n"
                 "23. For peak, busiest, highest, or lowest questions, use grouped functions and inspect the highest_group, highest_value, lowest_group, and lowest_value summary fields.\n"
                 "24. Return only computed findings and name the strongest drivers clearly.\n"
-                "25. Do not mention hypothetical follow-up analyses, parser errors, or failed attempts unless the user explicitly asked about failures and you have actual tool error output to report.\n"
-                "26. When using query_tabular_data, use simple DataFrame.query() syntax with backticked column names for columns containing spaces. Avoid method calls such as .str.lower(), .astype(...), or other Python expressions that DataFrame.query() may reject."
+                "25. If a successful tool result reports returned_rows == total_matches or returned_values == distinct_count, treat that as the full matching result set. Do not claim that only sample rows or workbook metadata are available in that case.\n"
+                "26. Do not mention hypothetical follow-up analyses, parser errors, or failed attempts unless the user explicitly asked about failures and you have actual tool error output to report.\n"
+                "27. When using query_tabular_data, use simple DataFrame.query() syntax with backticked column names for columns containing spaces. Avoid method calls such as .str.lower(), .astype(...), or other Python expressions that DataFrame.query() may reject."
             )
 
         baseline_invocations = plugin_logger.get_invocations_for_conversation(
@@ -3886,6 +4571,15 @@ async def run_tabular_sk_analysis(user_question, tabular_filenames, user_id,
                 execution_gap_messages=previous_execution_gap_messages,
                 discovery_feedback_messages=previous_discovery_feedback_messages,
             ))
+            for system_message in build_tabular_fact_memory_messages(
+                scope_id=fact_memory_scope_id,
+                scope_type=fact_memory_scope_type,
+                query_text=user_question,
+                conversation_id=conversation_id,
+                agent_id=None,
+                enabled=fact_memory_enabled,
+            ):
+                chat_history.add_system_message(system_message['content'])
 
             chat_history.add_user_message(
                 f"Analyze the tabular data to answer: {user_question}\n"
@@ -4022,10 +4716,19 @@ async def run_tabular_sk_analysis(user_question, tabular_filenames, user_id,
                         previous_tool_error_messages = []
                         previous_failed_call_parameters = []
                         previous_discovery_feedback_messages = []
+                        execution_gap_messages = []
+                        selected_sheets = []
+                        coverage_summary = get_tabular_result_coverage_summary(
+                            successful_analytical_invocations
+                        )
+                        retry_gap_messages = build_tabular_success_execution_gap_messages(
+                            user_question,
+                            analysis,
+                            successful_analytical_invocations,
+                        )
 
                         if entity_lookup_mode:
                             selected_sheets = get_tabular_invocation_selected_sheets(successful_analytical_invocations)
-                            execution_gap_messages = []
 
                             # Cross-sheet results ("ALL (cross-sheet search)") already span
                             # the entire workbook — no execution gap for sheet coverage.
@@ -4039,24 +4742,24 @@ async def run_tabular_sk_analysis(user_question, tabular_filenames, user_id,
                                     f"Previous attempt only queried worksheet(s): {rendered_selected_sheets}. The question asks for related records across worksheets, so query additional relevant sheets explicitly with sheet_name."
                                 )
 
-                            if is_tabular_access_limited_analysis(analysis):
-                                execution_gap_messages.append(
-                                    'Previous attempt still claimed the requested data was unavailable even though analytical tool calls succeeded. Use the returned rows and answer directly.'
-                                )
+                        execution_gap_messages.extend(retry_gap_messages)
 
-                            if execution_gap_messages and attempt_number < 3:
-                                previous_execution_gap_messages = execution_gap_messages
-                                log_event(
-                                    f"[Tabular SK Analysis] Attempt {attempt_number} entity lookup was incomplete despite successful tool calls; retrying",
-                                    extra={
-                                        'selected_sheets': selected_sheets,
-                                        'execution_gaps': previous_execution_gap_messages,
-                                        'successful_tool_count': len(successful_analytical_invocations),
-                                    },
-                                    level=logging.WARNING,
-                                )
-                                baseline_invocation_count = len(invocations_after)
-                                continue
+                        if execution_gap_messages and attempt_number < 3:
+                            previous_execution_gap_messages = execution_gap_messages
+                            log_event(
+                                f"[Tabular SK Analysis] Attempt {attempt_number} analysis was incomplete despite successful tool calls; retrying",
+                                extra={
+                                    'selected_sheets': selected_sheets,
+                                    'execution_gaps': previous_execution_gap_messages,
+                                    'successful_tool_count': len(successful_analytical_invocations),
+                                    'has_full_result_coverage': coverage_summary.get('has_full_result_coverage', False),
+                                    'has_partial_result_coverage': coverage_summary.get('has_partial_result_coverage', False),
+                                    'entity_lookup_mode': entity_lookup_mode,
+                                },
+                                level=logging.WARNING,
+                            )
+                            baseline_invocation_count = len(invocations_after)
+                            continue
 
                         previous_execution_gap_messages = []
                         log_event(
@@ -4244,18 +4947,6 @@ def collect_tabular_sk_citations(user_id, conversation_id):
 
     if not plugin_invocations:
         return []
-
-    def make_json_serializable(obj):
-        if obj is None:
-            return None
-        elif isinstance(obj, (str, int, float, bool)):
-            return obj
-        elif isinstance(obj, dict):
-            return {str(k): make_json_serializable(v) for k, v in obj.items()}
-        elif isinstance(obj, (list, tuple)):
-            return [make_json_serializable(item) for item in obj]
-        else:
-            return str(obj)
 
     citations = []
     for inv in plugin_invocations:
@@ -4813,6 +5504,29 @@ def resolve_foundry_scope_for_auth(auth_settings, endpoint=None):
     return 'https://ai.azure.com/.default'
 
 
+def get_foundry_api_version_candidates(primary_version, settings):
+    """Return distinct Foundry API versions to try for inference compatibility."""
+    settings = settings or {}
+    candidates = [
+        str(primary_version or '').strip(),
+        str(settings.get('azure_openai_gpt_api_version') or '').strip(),
+        '2024-10-01-preview',
+        '2024-07-01-preview',
+        '2024-05-01-preview',
+        '2024-02-01',
+    ]
+
+    unique_candidates = []
+    seen_candidates = set()
+    for candidate in candidates:
+        if not candidate or candidate in seen_candidates:
+            continue
+        seen_candidates.add(candidate)
+        unique_candidates.append(candidate)
+
+    return unique_candidates
+
+
 def build_streaming_multi_endpoint_client(auth_settings, provider, endpoint, api_version):
     """Create an inference client for a resolved streaming model endpoint."""
     auth_settings = auth_settings or {}
@@ -5188,50 +5902,38 @@ def register_route_backend_chats(app):
             }
         )
 
-    def get_facts_for_context(scope_id, scope_type, conversation_id: str = None, agent_id: str = None):
-        if not scope_id or not scope_type:
-            return ""
-        fact_store = FactMemoryStore()
-        kwargs = dict(
-            scope_type=scope_type,
-            scope_id=scope_id,
-        )
-        if agent_id:
-            kwargs['agent_id'] = agent_id
-        if conversation_id:
-            kwargs['conversation_id'] = conversation_id
-        facts = fact_store.get_facts(**kwargs)
-        if not facts:
-            return ""
-        fact_lines = []
-        for fact in facts:
-            value = str(fact.get('value') or '').strip()
-            if value:
-                fact_lines.append(f"- {value}")
-        if not fact_lines:
-            return ""
-        fact_lines.append(f"- agent_id: {agent_id or 'None'}")
-        fact_lines.append(f"- scope_type: {scope_type}")
-        fact_lines.append(f"- scope_id: {scope_id}")
-        fact_lines.append(f"- conversation_id: {conversation_id or 'None'}")
-        return "\n".join(fact_lines)
-
-    def inject_fact_memory_context(conversation_history, scope_id, scope_type, conversation_id: str = None, agent_id: str = None):
-        facts = get_facts_for_context(
+    def get_facts_for_context(scope_id, scope_type, query_text: str = None, conversation_id: str = None, agent_id: str = None, enabled: bool = True):
+        return _build_fact_memory_context_lines(
             scope_id=scope_id,
             scope_type=scope_type,
+            query_text=query_text,
             conversation_id=conversation_id,
             agent_id=agent_id,
+            enabled=enabled,
         )
-        if facts:
-            conversation_history.insert(0, {
-                "role": "system",
-                "content": f"<Fact Memory>\n{facts}\n</Fact Memory>"
-            })
-        conversation_history.insert(0, {
-            "role": "system",
-            "content": f"""<Conversation Metadata>\n<Scope ID: {scope_id}>\n<Scope Type: {scope_type}>\n<Conversation ID: {conversation_id}>\n<Agent ID: {agent_id}>\n</Conversation Metadata>"""
-        })
+
+    def inject_fact_memory_context(
+        conversation_history,
+        scope_id,
+        scope_type,
+        query_text: str = None,
+        conversation_id: str = None,
+        agent_id: str = None,
+        enabled: bool = True,
+        include_metadata: bool = False,
+    ):
+        prompt_payload = build_fact_memory_prompt_payload(
+            scope_id=scope_id,
+            scope_type=scope_type,
+            query_text=query_text,
+            conversation_id=conversation_id,
+            agent_id=agent_id,
+            enabled=enabled,
+            include_metadata=include_metadata,
+        )
+        for message in reversed(prompt_payload.get('context_messages', [])):
+            conversation_history.insert(0, message)
+        return prompt_payload
 
     @app.route('/api/chat', methods=['POST'])
     @swagger_route(security=get_auth_security())
@@ -5432,21 +6134,16 @@ def register_route_backend_chats(app):
             )
             try:
                 multi_endpoint_config = None
-                if should_use_default_model:
-                    try:
-                        multi_endpoint_config = resolve_default_model_gpt_config(settings)
-                        if multi_endpoint_config:
-                            debug_print("[GPTClient] Using default multi-endpoint model for agent request.")
-                    except Exception as default_exc:
-                        log_event(
-                            f"[GPTClient] Default model selection unavailable: {default_exc}",
-                            level=logging.WARNING,
-                            exceptionTraceback=True
-                        )
-                if multi_endpoint_config is None and request_agent_info:
-                    debug_print("[GPTClient] Skipping multi-endpoint resolution because agent_info is provided.")
-                elif multi_endpoint_config is None:
-                    multi_endpoint_config = resolve_multi_endpoint_gpt_config(settings, data, enable_gpt_apim)
+                if settings.get('enable_multi_model_endpoints', False):
+                    multi_endpoint_config = resolve_streaming_multi_endpoint_gpt_config(
+                        settings,
+                        data,
+                        user_id,
+                        active_group_ids=active_group_ids,
+                        allow_default_selection=should_use_default_model,
+                    )
+                    if multi_endpoint_config and should_use_default_model and not data.get('model_endpoint_id'):
+                        debug_print("[GPTClient] Using default multi-endpoint model for agent request.")
                 if multi_endpoint_config:
                     gpt_client, gpt_model, gpt_provider, gpt_endpoint, gpt_auth, gpt_api_version = multi_endpoint_config
                 elif enable_gpt_apim:
@@ -5929,16 +6626,18 @@ def register_route_backend_chats(app):
                 conversation_item['last_updated'] = datetime.utcnow().isoformat()
                 cosmos_conversations_container.upsert_item(conversation_item) # Update timestamp and potentially title
 
-                # Generate assistant_message_id early for thought tracking
-                assistant_message_id = f"{conversation_id}_assistant_{int(time.time())}_{random.randint(1000,9999)}"
-
-                # Initialize thought tracker
-                thought_tracker = ThoughtTracker(
-                    conversation_id=conversation_id,
-                    message_id=assistant_message_id,
-                    thread_id=current_user_thread_id,
-                    user_id=user_id
-                )
+            assistant_message_id, thought_tracker, assistant_thread_attempt, response_message_context = _initialize_assistant_response_tracking(
+                conversation_id=conversation_id,
+                user_message_id=user_message_id,
+                current_user_thread_id=current_user_thread_id,
+                previous_thread_id=previous_thread_id,
+                retry_thread_attempt=retry_thread_attempt,
+                is_retry=is_retry,
+                user_id=user_id,
+            )
+            user_info_for_assistant = response_message_context.get('user_info')
+            user_thread_id = response_message_context.get('thread_id')
+            user_previous_thread_id = response_message_context.get('previous_thread_id')
 
         # region 3 - Content Safety
             # ---------------------------------------------------------------------
@@ -5993,7 +6692,14 @@ def register_route_backend_chats(app):
                             'blocklist_matches': blocklist_matches,
                             'timestamp': datetime.utcnow().isoformat(),
                             'reason': "; ".join(block_reasons),
-                            'metadata': {}
+                            'metadata': {
+                                'message_id': assistant_message_id,
+                                'thread_info': {
+                                    'thread_id': response_message_context.get('thread_id'),
+                                    'previous_thread_id': response_message_context.get('previous_thread_id'),
+                                    'thread_attempt': assistant_thread_attempt,
+                                },
+                            }
                         }
                         cosmos_safety_container.upsert_item(safety_item)
 
@@ -6015,17 +6721,13 @@ def register_route_backend_chats(app):
                             )
 
                         # Insert a special "role": "safety" or "blocked"
-                        safety_message_id = f"{conversation_id}_safety_{int(time.time())}_{random.randint(1000,9999)}"
-
-                        safety_doc = {
-                            'id': safety_message_id,
-                            'conversation_id': conversation_id,
-                            'role': 'safety',
-                            'content': blocked_msg_content.strip(),
-                            'timestamp': datetime.utcnow().isoformat(),
-                            'model_deployment_name': None,
-                            'metadata': {},  # No metadata needed for safety messages
-                        }
+                        safety_doc = _build_safety_message_doc(
+                            conversation_id=conversation_id,
+                            message_id=assistant_message_id,
+                            content=blocked_msg_content.strip(),
+                            response_context=response_message_context,
+                            thread_attempt=assistant_thread_attempt,
+                        )
                         cosmos_messages_container.upsert_item(safety_doc)
 
                         # Update conversation's last_updated
@@ -6036,11 +6738,12 @@ def register_route_backend_chats(app):
                         return jsonify({
                             'reply': blocked_msg_content.strip(),
                             'blocked': True,
+                            'role': 'safety',
                             'triggered_categories': triggered_categories,
                             'blocklist_matches': blocklist_matches,
                             'conversation_id': conversation_id,
                             'conversation_title': conversation_item['title'],
-                            'message_id': safety_message_id
+                            'message_id': assistant_message_id
                         }), 200
 
                 except HttpResponseError as e:
@@ -7199,7 +7902,10 @@ def register_route_backend_chats(app):
                     final_api_source_refs.insert(insert_idx, 'system:default_prompt')
                     default_system_prompt_inserted = True
 
-            if not original_hybrid_search_enabled:
+            if should_apply_history_grounding_message(
+                original_hybrid_search_enabled,
+                prior_grounded_document_refs,
+            ):
                 history_grounding_message = build_history_grounding_system_message()
                 insert_idx = 0
                 if (
@@ -7384,6 +8090,27 @@ def register_route_backend_chats(app):
                 log_event(f"[SKChat] No agents loaded - proceeding in model-only mode", level=logging.INFO)
             
             log_event(f"[SKChat] Semantic Kernel enabled. Per-user mode: {per_user_semantic_kernel}, Multi-agent orchestration: {enable_multi_agent_orchestration}, agents enabled: {user_enable_agents}")
+
+            fact_memory_enabled = bool(settings.get('enable_fact_memory_plugin', False))
+            fact_memory_payload = inject_fact_memory_context(
+                conversation_history=conversation_history_for_api,
+                scope_id=scope_id,
+                scope_type=scope_type,
+                query_text=user_message,
+                conversation_id=conversation_id,
+                agent_id=None,
+                enabled=fact_memory_enabled,
+                include_metadata=bool(enable_semantic_kernel and user_enable_agents),
+            )
+            for thought in fact_memory_payload.get('thoughts', []):
+                thought_tracker.add_thought(
+                    thought.get('step_type') or 'fact_memory',
+                    thought.get('content'),
+                    thought.get('detail'),
+                )
+            for citation in fact_memory_payload.get('citations', []):
+                agent_citations_list.append(citation)
+
             if enable_semantic_kernel and user_enable_agents:
             # PATCH: Use new agent selection logic
                 agent_name_to_select = None
@@ -7450,19 +8177,6 @@ def register_route_backend_chats(app):
                     "selected_agent_id": agent_id or None,
                     "kernel": bool(kernel is not None),
                 }
-
-                # Use the orchestrator agent as the default agent
-                
-
-                # Add additional metadata here to scope the facts to be returned
-                # Allows for additional per agent and per conversation scoping.
-                inject_fact_memory_context(
-                    conversation_history=conversation_history_for_api,
-                    scope_id=scope_id,
-                    scope_type=scope_type,
-                    conversation_id=conversation_id,
-                    agent_id=agent_id,
-                )
 
                 agent_message_history = [
                     ChatMessageContent(
@@ -7555,19 +8269,6 @@ def register_route_backend_chats(app):
                                     timestamp_str = inv.timestamp.isoformat()
                                 else:
                                     timestamp_str = str(inv.timestamp)
-                            
-                            # Ensure all values are JSON serializable
-                            def make_json_serializable(obj):
-                                if obj is None:
-                                    return None
-                                elif isinstance(obj, (str, int, float, bool)):
-                                    return obj
-                                elif isinstance(obj, dict):
-                                    return {str(k): make_json_serializable(v) for k, v in obj.items()}
-                                elif isinstance(obj, (list, tuple)):
-                                    return [make_json_serializable(item) for item in obj]
-                                else:
-                                    return str(obj)
                             
                             citation = {
                                 'tool_name': f"{inv.plugin_name}.{inv.function_name}",
@@ -7677,9 +8378,8 @@ def register_route_backend_chats(app):
                                         f"Agent retrieved citation from Azure AI Foundry"
                                     )
                                 for citation in foundry_citations:
-                                    try:
-                                        serializable = json.loads(json.dumps(citation, default=str))
-                                    except (TypeError, ValueError):
+                                    serializable = make_json_serializable(citation)
+                                    if not isinstance(serializable, dict):
                                         serializable = {'value': str(citation)}
                                     agent_citations_list.append({
                                         'tool_name': agent_used,
@@ -7848,7 +8548,12 @@ def register_route_backend_chats(app):
                                 continue
                             try:
                                 debug_print(f"[SKChat] Foundry retry api_version={candidate}")
-                                retry_client = build_multi_endpoint_client(gpt_auth or {}, gpt_provider, gpt_endpoint, candidate)
+                                retry_client = build_streaming_multi_endpoint_client(
+                                    gpt_auth or {},
+                                    gpt_provider,
+                                    gpt_endpoint,
+                                    candidate,
+                                )
                                 response = retry_client.chat.completions.create(**api_params)
                                 break
                             except Exception as retry_exc:
@@ -7981,20 +8686,9 @@ def register_route_backend_chats(app):
             
             # assistant_message_id was generated earlier for thought tracking
 
-            # Get user_info and thread_id from the user message for ownership tracking and threading
-            user_info_for_assistant = None
-            user_thread_id = None
-            user_previous_thread_id = None
-            try:
-                user_msg = cosmos_messages_container.read_item(
-                    item=user_message_id,
-                    partition_key=conversation_id
-                )
-                user_info_for_assistant = user_msg.get('metadata', {}).get('user_info')
-                user_thread_id = user_msg.get('metadata', {}).get('thread_info', {}).get('thread_id')
-                user_previous_thread_id = user_msg.get('metadata', {}).get('thread_info', {}).get('previous_thread_id')
-            except Exception as e:
-                debug_print(f"Warning: Could not retrieve user_info from user message: {e}")
+            user_info_for_assistant = response_message_context.get('user_info')
+            user_thread_id = response_message_context.get('thread_id')
+            user_previous_thread_id = response_message_context.get('previous_thread_id')
             
             # Assistant message should be part of the same thread as the user message
             # Only system/augmentation messages create new threads within a conversation
@@ -8007,7 +8701,7 @@ def register_route_backend_chats(app):
                 user_info=user_info_for_assistant,
             )
 
-            assistant_doc = {
+            assistant_doc = make_json_serializable({
                 'id': assistant_message_id,
                 'conversation_id': conversation_id,
                 'role': 'assistant',
@@ -8029,16 +8723,16 @@ def register_route_backend_chats(app):
                         'thread_id': user_thread_id,  # Same thread as user message
                         'previous_thread_id': user_previous_thread_id,  # Same previous_thread_id as user message
                         'active_thread': True,
-                        'thread_attempt': retry_thread_attempt if is_retry else 1
+                        'thread_attempt': assistant_thread_attempt
                     },
                     'token_usage': token_usage_data  # Store token usage information
                 } # Used by SK and reasoning effort
-            }
+            })
             
             debug_print(f"🔍 Chat API - Creating assistant message with thread_info:")
             debug_print(f"    thread_id: {user_thread_id}")
             debug_print(f"    previous_thread_id: {user_previous_thread_id}")
-            debug_print(f"    attempt: {retry_thread_attempt if is_retry else 1}")
+            debug_print(f"    attempt: {assistant_thread_attempt}")
             debug_print(f"    is_retry: {is_retry}")
             
             cosmos_messages_container.upsert_item(assistant_doc)
@@ -8137,7 +8831,7 @@ def register_route_backend_chats(app):
             enable_redis_for_kernel = False
             if enable_semantic_kernel and per_user_semantic_kernel and redis_client and enable_redis_for_kernel:
                 save_user_kernel(user_id, g.kernel, g.kernel_agents, redis_client)
-            return jsonify({
+            return jsonify(make_json_serializable({
                 'reply': ai_message, # Send the AI's response (or the error message) back
                 'conversation_id': conversation_id,
                 'conversation_title': conversation_item['title'], # Send updated title
@@ -8159,7 +8853,7 @@ def register_route_backend_chats(app):
                 'reload_messages': reload_messages_required,
                 'kernel_fallback_notice': kernel_fallback_notice,
                 'thoughts_enabled': thought_tracker.enabled
-            }), 200
+            })), 200
         
         except Exception as e:
             import traceback
@@ -8204,9 +8898,13 @@ def register_route_backend_chats(app):
         except Exception as e:
             return jsonify({'error': f'Failed to parse request: {str(e)}'}), 400
 
-        compatibility_mode = bool(data.get('image_generation')) or bool(
-            data.get('retry_user_message_id') or data.get('edited_user_message_id')
-        )
+        retry_user_message_id = data.get('retry_user_message_id') or data.get('edited_user_message_id')
+        retry_thread_id = data.get('retry_thread_id')
+        retry_thread_attempt = data.get('retry_thread_attempt')
+        is_retry = bool(retry_user_message_id)
+        is_edit = bool(data.get('edited_user_message_id'))
+
+        compatibility_mode = bool(data.get('image_generation')) or is_retry
         requested_conversation_id = str(data.get('conversation_id') or '').strip() or None
         finalized_conversation_id = requested_conversation_id or str(uuid.uuid4())
         is_new_stream_conversation = requested_conversation_id is None
@@ -8220,6 +8918,7 @@ def register_route_backend_chats(app):
             f"requested_conversation_id={requested_conversation_id} | "
             f"conversation_id={finalized_conversation_id} | "
             f"compatibility_mode={compatibility_mode} | "
+            f"is_retry={is_retry} | "
             f"hybrid_search={data.get('hybrid_search')} | "
             f"web_search={data.get('web_search_enabled')} | "
             f"doc_scope={data.get('doc_scope')} | "
@@ -8233,9 +8932,18 @@ def register_route_backend_chats(app):
             f"message_preview={request_preview!r}"
         )
 
+        if is_retry:
+            operation_type = 'Edit' if is_edit else 'Retry'
+            debug_print(
+                f"[Streaming] {operation_type} detected | "
+                f"user_message_id={retry_user_message_id} | "
+                f"thread_id={retry_thread_id} | "
+                f"attempt={retry_thread_attempt}"
+            )
+
         def normalize_legacy_chat_payload(payload):
             """Convert the legacy JSON response shape into the streaming terminal payload."""
-            return {
+            return make_json_serializable({
                 'done': True,
                 'conversation_id': payload.get('conversation_id'),
                 'conversation_title': payload.get('conversation_title'),
@@ -8255,7 +8963,7 @@ def register_route_backend_chats(app):
                 'kernel_fallback_notice': payload.get('kernel_fallback_notice'),
                 'thoughts_enabled': payload.get('thoughts_enabled', False),
                 'blocked': payload.get('blocked', False),
-            }
+            })
 
         def generate_compatibility_response():
             """Bridge legacy JSON chat handling into a terminal SSE event for parity cases."""
@@ -8389,9 +9097,19 @@ def register_route_backend_chats(app):
                 enable_semantic_kernel = settings.get('enable_semantic_kernel', False)
                 per_user_semantic_kernel = settings.get('per_user_semantic_kernel', False)
                 user_settings = {}
-                user_enable_agents = False
+                user_enable_agents = True
+                force_enable_agents = bool(request_agent_info)
                 
                 debug_print(f"[DEBUG] enable_semantic_kernel={enable_semantic_kernel}, per_user_semantic_kernel={per_user_semantic_kernel}")
+
+                if force_enable_agents:
+                    g.force_enable_agents = True
+                    if isinstance(request_agent_info, dict):
+                        g.request_agent_info = request_agent_info
+                        g.request_agent_name = request_agent_info.get('name')
+                    else:
+                        g.request_agent_info = {'name': request_agent_info}
+                        g.request_agent_name = request_agent_info
                 
                 # Initialize Semantic Kernel if needed
                 redis_client = None
@@ -8424,7 +9142,9 @@ def register_route_backend_chats(app):
                                 sanitized_user_settings = sanitize_settings_for_logging(user_settings) if isinstance(user_settings, dict) else user_settings
                                 debug_print(f"[DEBUG] Using user_settings_obj directly (sanitized): {sanitized_user_settings}")
                         
-                        user_enable_agents = user_settings.get('enable_agents', False)
+                        user_enable_agents = user_settings.get('enable_agents', True)
+                        if force_enable_agents:
+                            user_enable_agents = True
                         debug_print(f"[DEBUG] user_enable_agents={user_enable_agents}")
                     except Exception as e:
                         debug_print(f"Error loading user settings: {e}")
@@ -8821,16 +9541,18 @@ def register_route_backend_chats(app):
                 conversation_item['last_updated'] = datetime.utcnow().isoformat()
                 cosmos_conversations_container.upsert_item(conversation_item)
 
-                # Generate assistant_message_id early for thought tracking
-                assistant_message_id = f"{conversation_id}_assistant_{int(time.time())}_{random.randint(1000,9999)}"
-
-                # Initialize thought tracker for streaming path
-                thought_tracker = ThoughtTracker(
+                assistant_message_id, thought_tracker, assistant_thread_attempt, response_message_context = _initialize_assistant_response_tracking(
                     conversation_id=conversation_id,
-                    message_id=assistant_message_id,
-                    thread_id=current_user_thread_id,
-                    user_id=user_id
+                    user_message_id=user_message_id,
+                    current_user_thread_id=current_user_thread_id,
+                    previous_thread_id=previous_thread_id,
+                    retry_thread_attempt=retry_thread_attempt,
+                    is_retry=is_retry,
+                    user_id=user_id,
                 )
+                user_info_for_assistant = response_message_context.get('user_info')
+                user_thread_id = response_message_context.get('thread_id')
+                user_previous_thread_id = response_message_context.get('previous_thread_id')
 
                 def serialize_thought_event(step_type, content, step_index, message_id=None):
                     return f"data: {json.dumps({'type': 'thought', 'message_id': message_id or assistant_message_id, 'step_index': step_index, 'step_type': step_type, 'content': content})}\n\n"
@@ -8905,7 +9627,14 @@ def register_route_backend_chats(app):
                                 'blocklist_matches': blocklist_matches,
                                 'timestamp': datetime.utcnow().isoformat(),
                                 'reason': "; ".join(block_reasons),
-                                'metadata': {}
+                                'metadata': {
+                                    'message_id': assistant_message_id,
+                                    'thread_info': {
+                                        'thread_id': response_message_context.get('thread_id'),
+                                        'previous_thread_id': response_message_context.get('previous_thread_id'),
+                                        'thread_attempt': assistant_thread_attempt,
+                                    },
+                                }
                             }
                             cosmos_safety_container.upsert_item(safety_item)
 
@@ -8927,24 +9656,36 @@ def register_route_backend_chats(app):
                                 )
 
                             # Insert safety message
-                            safety_message_id = f"{conversation_id}_safety_{int(time.time())}_{random.randint(1000,9999)}"
-                            safety_doc = {
-                                'id': safety_message_id,
-                                'conversation_id': conversation_id,
-                                'role': 'safety',
-                                'content': blocked_msg_content.strip(),
-                                'timestamp': datetime.utcnow().isoformat(),
-                                'model_deployment_name': None,
-                                'metadata': {},
-                            }
+                            safety_doc = _build_safety_message_doc(
+                                conversation_id=conversation_id,
+                                message_id=assistant_message_id,
+                                content=blocked_msg_content.strip(),
+                                response_context=response_message_context,
+                                thread_attempt=assistant_thread_attempt,
+                            )
                             cosmos_messages_container.upsert_item(safety_doc)
 
                             conversation_item['last_updated'] = datetime.utcnow().isoformat()
                             cosmos_conversations_container.upsert_item(conversation_item)
 
-                            # Stream the blocked response and stop
-                            yield f"data: {json.dumps({'content': blocked_msg_content.strip(), 'blocked': True})}\n\n"
-                            yield "data: [DONE]\n\n"
+                            final_data = make_json_serializable({
+                                'content': blocked_msg_content.strip(),
+                                'full_content': blocked_msg_content.strip(),
+                                'blocked': True,
+                                'role': 'safety',
+                                'done': True,
+                                'conversation_id': conversation_id,
+                                'conversation_title': conversation_item.get('title'),
+                                'message_id': assistant_message_id,
+                                'user_message_id': user_message_id,
+                                'augmented': False,
+                                'hybrid_citations': [],
+                                'web_search_citations': [],
+                                'agent_citations': [],
+                                'model_deployment_name': None,
+                                'thoughts_enabled': thought_tracker.enabled,
+                            })
+                            yield f"data: {json.dumps(final_data)}\n\n"
                             return
 
                     except HttpResponseError as e:
@@ -9604,7 +10345,10 @@ def register_route_backend_chats(app):
                         final_api_source_refs.insert(insert_idx, 'system:default_prompt')
                         default_system_prompt_inserted = True
 
-                if not original_hybrid_search_enabled:
+                if should_apply_history_grounding_message(
+                    original_hybrid_search_enabled,
+                    prior_grounded_document_refs,
+                ):
                     history_grounding_message = build_history_grounding_system_message()
                     insert_idx = 0
                     if (
@@ -9638,6 +10382,26 @@ def register_route_backend_chats(app):
                     agent_citations_list.append(
                         build_history_context_debug_citation(history_debug_info, 'streaming')
                     )
+
+                fact_memory_enabled = bool(settings.get('enable_fact_memory_plugin', False))
+                fact_memory_payload = inject_fact_memory_context(
+                    conversation_history=conversation_history_for_api,
+                    scope_id=scope_id,
+                    scope_type=scope_type,
+                    query_text=user_message,
+                    conversation_id=conversation_id,
+                    agent_id=None,
+                    enabled=fact_memory_enabled,
+                    include_metadata=bool(enable_semantic_kernel and user_enable_agents),
+                )
+                for thought in fact_memory_payload.get('thoughts', []):
+                    yield emit_thought(
+                        thought.get('step_type') or 'fact_memory',
+                        thought.get('content'),
+                        thought.get('detail'),
+                    )
+                for citation in fact_memory_payload.get('citations', []):
+                    agent_citations_list.append(citation)
                 
                 # Check if agents are enabled and should be used
                 selected_agent = None
@@ -9728,14 +10492,6 @@ def register_route_backend_chats(app):
                         else:
                             debug_print(f"[Streaming] ⚠️ No agent selected, falling back to GPT")
 
-                    inject_fact_memory_context(
-                        conversation_history=conversation_history_for_api,
-                        scope_id=scope_id,
-                        scope_type=scope_type,
-                        conversation_id=conversation_id,
-                        agent_id=getattr(selected_agent, 'id', None),
-                    )
-                
                 # Stream the response
                 accumulated_content = ""
                 token_usage_data = None  # Will be populated from final stream chunk
@@ -9974,18 +10730,6 @@ def register_route_backend_chats(app):
                                 else:
                                     timestamp_str = str(inv.timestamp)
                             
-                            def make_json_serializable(obj):
-                                if obj is None:
-                                    return None
-                                elif isinstance(obj, (str, int, float, bool)):
-                                    return obj
-                                elif isinstance(obj, dict):
-                                    return {str(k): make_json_serializable(v) for k, v in obj.items()}
-                                elif isinstance(obj, (list, tuple)):
-                                    return [make_json_serializable(item) for item in obj]
-                                else:
-                                    return str(obj)
-                            
                             citation = {
                                 'tool_name': f"{inv.plugin_name}.{inv.function_name}",
                                 'function_name': inv.function_name,
@@ -10006,9 +10750,8 @@ def register_route_backend_chats(app):
                             foundry_label = agent_name_used or ('New Foundry Application' if stream_selected_agent_type == 'new_foundry' else 'Azure AI Foundry Agent')
                             for citation in foundry_citations:
                                 yield emit_thought('agent_tool_call', 'Agent retrieved citation from Azure AI Foundry')
-                                try:
-                                    serializable = json.loads(json.dumps(citation, default=str))
-                                except (TypeError, ValueError):
+                                serializable = make_json_serializable(citation)
+                                if not isinstance(serializable, dict):
                                     serializable = {'value': str(citation)}
                                 agent_citations_list.append({
                                     'tool_name': foundry_label,
@@ -10082,20 +10825,9 @@ def register_route_backend_chats(app):
                         yield emit_thought('generation', f"'{gpt_model}' responded ({gpt_stream_total_duration_s}s from initial message)")
                     
                     # Stream complete - save message and send final metadata
-                    # Get user thread info to maintain thread consistency
-                    user_thread_id = None
-                    user_previous_thread_id = None
-                    user_info_for_assistant = None
-                    try:
-                        user_msg = cosmos_messages_container.read_item(
-                            item=user_message_id,
-                            partition_key=conversation_id
-                        )
-                        user_info_for_assistant = user_msg.get('metadata', {}).get('user_info')
-                        user_thread_id = user_msg.get('metadata', {}).get('thread_info', {}).get('thread_id')
-                        user_previous_thread_id = user_msg.get('metadata', {}).get('thread_info', {}).get('previous_thread_id')
-                    except Exception as e:
-                        debug_print(f"Warning: Could not retrieve thread_id from user message: {e}")
+                    user_info_for_assistant = response_message_context.get('user_info')
+                    user_thread_id = response_message_context.get('thread_id')
+                    user_previous_thread_id = response_message_context.get('previous_thread_id')
                     assistant_timestamp = datetime.utcnow().isoformat()
                     prepared_agent_citations = persist_agent_citation_artifacts(
                         conversation_id=conversation_id,
@@ -10105,7 +10837,7 @@ def register_route_backend_chats(app):
                         user_info=user_info_for_assistant,
                     )
 
-                    assistant_doc = {
+                    assistant_doc = make_json_serializable({
                         'id': assistant_message_id,
                         'conversation_id': conversation_id,
                         'role': 'assistant',
@@ -10126,11 +10858,11 @@ def register_route_backend_chats(app):
                                 'thread_id': user_thread_id,
                                 'previous_thread_id': user_previous_thread_id,
                                 'active_thread': True,
-                                'thread_attempt': 1
+                                'thread_attempt': assistant_thread_attempt
                             },
                             'token_usage': token_usage_data if token_usage_data else None  # Store token usage from stream
                         }
-                    }
+                    })
                     cosmos_messages_container.upsert_item(assistant_doc)
                     
                     # Log chat token usage to activity_logs for easy reporting
@@ -10220,7 +10952,7 @@ def register_route_backend_chats(app):
                     cosmos_conversations_container.upsert_item(conversation_item)
                     
                     # Send final message with metadata
-                    final_data = {
+                    final_data = make_json_serializable({
                         'done': True,
                         'conversation_id': conversation_id,
                         'conversation_title': conversation_item['title'],
@@ -10240,7 +10972,7 @@ def register_route_backend_chats(app):
                         'agent_name': agent_name_used if use_agent_streaming else None,
                         'full_content': accumulated_content,
                         'thoughts_enabled': thought_tracker.enabled
-                    }
+                    })
                     debug_print(
                         "[Streaming] Finalizing stream response | "
                         f"conversation_id={conversation_id} | message_id={assistant_message_id} | "
@@ -10266,7 +10998,7 @@ def register_route_backend_chats(app):
                             user_info=user_info_for_assistant,
                         )
                         
-                        assistant_doc = {
+                        assistant_doc = make_json_serializable({
                             'id': assistant_message_id,
                             'conversation_id': conversation_id,
                             'role': 'assistant',
@@ -10292,7 +11024,7 @@ def register_route_backend_chats(app):
                                     'thread_attempt': 1
                                 }
                             }
-                        }
+                        })
                         try:
                             cosmos_messages_container.upsert_item(assistant_doc)
                         except Exception as ex:
@@ -11034,6 +11766,14 @@ def build_history_grounding_system_message():
     }
 
 
+def should_apply_history_grounding_message(
+    original_hybrid_search_enabled,
+    prior_grounded_document_refs,
+):
+    """Apply bounded grounding only when prior grounded docs exist for this conversation."""
+    return (not bool(original_hybrid_search_enabled)) and bool(prior_grounded_document_refs)
+
+
 def build_assistant_history_content_with_citations(message, content):
     base_content = str(content or '').strip()
     citation_sections = []
@@ -11772,9 +12512,8 @@ def perform_web_search(
     if citations:
         for i, citation in enumerate(citations):
             debug_print(f"[WebSearch] Processing citation {i}: {json.dumps(citation, default=str)[:200]}...")
-            try:
-                serializable = json.loads(json.dumps(citation, default=str))
-            except (TypeError, ValueError):
+            serializable = make_json_serializable(citation)
+            if not isinstance(serializable, dict):
                 serializable = {"value": str(citation)}
             citation_title = serializable.get("title") or serializable.get("url") or "Web search source"
             debug_print(f"[WebSearch] Adding agent citation with title: {citation_title}")

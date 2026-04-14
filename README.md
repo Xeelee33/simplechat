@@ -12,6 +12,10 @@ The application utilizes **Azure Cosmos DB** for storing conversations, metadata
 
 [Simple Chat Documentation | Simple Chat Documentation](https://microsoft.github.io/simplechat/)
 
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for the fork-based workflow, target branch guidance, and local development references for SimpleChat contributors.
+
 ## Quick Deploy
 
 [Detailed deployment Guide](./deployers/bicep/README.md)
@@ -174,7 +178,7 @@ azd up
     - The container already starts Gunicorn through `application/single_app/Dockerfile`.
 - If your environment needs private or self-signed certificate authorities for outbound TLS checks to internal services, add them during image build using [docs/how-to/docker_customization.md](docs/how-to/docker_customization.md).
 
-## Native Python
+### Native Python
 - For **native Python App Service** deployments, deploy the `application/single_app` folder and set the App Service Startup command explicitly.
 
 Native Python deployment references:
