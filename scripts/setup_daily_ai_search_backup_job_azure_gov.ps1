@@ -80,20 +80,31 @@ function Ensure-AzCli {
 function Ensure-Extension {
     param([string]$Name)
 
-    $installed = $null
-    $installed = az extension show --name $Name --query "name" -o tsv 2>$null
-
-    if (-not [string]::IsNullOrWhiteSpace($installed)) {
+    $installedCount = az extension list --query "[?name=='$Name'] | length(@)" -o tsv
+    if ($installedCount -ge 1) {
         Write-Host "Azure CLI extension '$Name' already installed."
         return
     }
 
-    az extension add --name $Name --allow-preview true | Out-Null
+    $installedSuccessfully = $true
+    try {
+        az extension add --name $Name --allow-preview true | Out-Null
+    }
+    catch {
+        $installedSuccessfully = $false
+    }
 
-    if ($LASTEXITCODE -ne 0) {
+    if (-not $installedSuccessfully) {
         Write-Warning "Failed to install Azure CLI extension '$Name'. Verifying whether 'az containerapp' is already available."
-        az containerapp --help 1>$null 2>$null
-        if ($LASTEXITCODE -ne 0) {
+        $containerAppAvailable = $true
+        try {
+            az containerapp --help 1>$null 2>$null
+        }
+        catch {
+            $containerAppAvailable = $false
+        }
+
+        if (-not $containerAppAvailable) {
             throw "Azure CLI extension '$Name' is required and could not be installed. Resolve Azure CLI extension installation issues and rerun."
         }
         Write-Host "Continuing because 'az containerapp' is available."
