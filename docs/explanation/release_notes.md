@@ -1,8 +1,48 @@
 <!-- BEGIN release_notes.md BLOCK -->
 
-This page tracks notable Simple Chat releases and organizes the detailed change log by version. The timeline below provides a quick visual overview of the current release progression through v0.240.002, and the per-version entries continue immediately after it.
+This page tracks notable Simple Chat releases and organizes the detailed change log by version. The timeline below provides a quick visual overview of the current release progression through v0.241.011, and the per-version entries continue immediately after it.
 
 For feature-focused and fix-focused drill-downs by version, see [Features by Version](/explanation/features/) and [Fixes by Version](/explanation/fixes/).
+
+### **(v0.241.011)**
+
+#### Bug Fixes
+
+*   **Azure Gov Backup Job Provisioning Hardening**
+    *   Fixed repeated Azure CLI extension setup failures by making `containerapp` extension install idempotent: the script now checks whether the extension is already installed before attempting add/upgrade.
+    *   Fixed Windows Azure CLI `UnicodeEncodeError` during ACR build log streaming by switching `az acr build` to `--no-logs`, preventing colorized stream output from failing on cp1252 consoles.
+    *   Fixed Azure Government Container Apps Job registry auth handling for `.azurecr.us` by resolving and using ACR admin credentials (`--registry-username` and `--registry-password`) where CLI validation rejected identity-only registry settings.
+    *   Added managed identity `AcrPull` role assignment and enabled stricter native command failure behavior so script execution stops on real `az` failures instead of reporting false success.
+    *   (Ref: `scripts/setup_daily_ai_search_backup_job_azure_gov.ps1`, `application/single_app/config.py`)
+
+### **(v0.241.010)**
+
+#### Bug Fixes
+
+*   **ACR Build Unicode Error and Job Existence Check Fix**
+    *   Fixed `UnicodeEncodeError: 'charmap' codec can't encode characters` crash during `az acr build` log streaming on Windows. Azure CLI's colorama output attempted to write non-cp1252 characters to the Windows console codec; resolved by setting `$env:PYTHONIOENCODING = "utf-8"` before any `az` calls.
+    *   Fixed `NativeCommandError` when checking for an existing Container Apps Job. With `$ErrorActionPreference = "Stop"`, a non-zero exit from `az containerapp job show` (job not yet created) became a terminating error even with `2>$null`; wrapped the call in `try {} catch {}` so a missing job falls through to the create branch as intended.
+    *   (Ref: `scripts/setup_daily_ai_search_backup_job_azure_gov.ps1`, `application/single_app/config.py`)
+
+### **(v0.241.009)**
+
+#### Bug Fixes
+
+*   **Azure AI Search Backup Job Dockerfile and ACR Build Fix**
+    *   Fixed `ERROR: Unable to find '.\Dockerfile'` failure when running `setup_daily_ai_search_backup_job_azure_gov.ps1` with `-BuildImage`. The script was calling `az acr build` without a `--file` flag, causing it to look for the main Flask app Dockerfile at the repo root instead of the backup-specific one.
+    *   Added `scripts/Dockerfile` — a minimal Python 3.12-slim image that installs `azure-identity`, `azure-search-documents`, and `azure-storage-blob`, then copies the `scripts/` directory for use as the Container Apps Job image.
+    *   Updated the `az acr build` call in the provisioning script to use `--file scripts/Dockerfile` so the correct image is built and the downstream Container Apps Job create step no longer fails with `ResourceNotFound`.
+    *   (Ref: `scripts/Dockerfile`, `scripts/setup_daily_ai_search_backup_job_azure_gov.ps1`, `application/single_app/config.py`)
+
+### **(v0.241.008)**
+
+#### New Features
+
+*   **Local Daily Azure AI Search Backup Scheduler**
+    *   Added a local PowerShell runner that executes the Azure AI Search backup script in direct-to-blob mode, enabling cron-like daily backups on Windows hosts running outside Azure scheduler services.
+    *   Added a local operations runbook with manual validation commands and a ready Windows Task Scheduler (`schtasks`) command template for daily execution.
+    *   Added a functional scaffold test to validate local scheduler script markers and required backup arguments for operational consistency.
+    *   (Ref: `scripts/run_daily_ai_search_backup_local.ps1`, `docs/explanation/features/LOCAL_DAILY_AI_SEARCH_BACKUP_SCHEDULER.md`, `functional_tests/test_local_daily_ai_search_backup_scheduler_scaffold.py`, `application/single_app/config.py`)
 
 ### **(v0.241.007)**
 
@@ -14,8 +54,6 @@ For feature-focused and fix-focused drill-downs by version, see [Features by Ver
     *   Operations: run on demand with `az containerapp job start -g <resource-group> -n job-search-backup-daily` and verify with `az containerapp job execution list -g <resource-group> -n job-search-backup-daily -o table`.
     *   Added companion runbook documentation and a functional scaffold test to validate core script and README markers for operational consistency.
     *   (Ref: `scripts/setup_daily_ai_search_backup_job_azure_gov.ps1`, `scripts/README_DAILY_AI_SEARCH_BACKUP_JOB_AZURE_GOV.md`, `docs/explanation/features/AZURE_DAILY_SEARCH_BACKUP_JOB_AUTOMATION.md`, `functional_tests/test_daily_ai_search_backup_job_script_scaffold.py`, `application/single_app/config.py`)
-
-#### New Features
 
 *   **Azure AI Search Restore from Blob Container**
     *   Added direct restore support from Azure Blob Storage backups generated by the backup script layout, so restore no longer requires local backup files when artifacts are already in blob.
@@ -66,7 +104,6 @@ For feature-focused and fix-focused drill-downs by version, see [Features by Ver
     *   Added a functional validation test for dry-run backup scaffolding behavior.
     *   (Ref: `scripts/backup_ai_search_indexes.py`, `docs/explanation/features/AZURE_AI_SEARCH_BACKUP_STRATEGY.md`, `functional_tests/test_ai_search_backup_script_scaffold.py`, `application/single_app/config.py`)
 
-### **(v0.240.053)**
 ### **(v0.241.006)**
 
 #### Bug Fixes

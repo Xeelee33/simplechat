@@ -57,6 +57,14 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+if ($PSVersionTable.PSVersion.Major -ge 7) {
+    $PSNativeCommandUseErrorActionPreference = $true
+}
+
+# Force UTF-8 so Azure CLI log streaming (colorama) doesn't crash on
+# non-cp1252 characters when running on Windows.
+$env:PYTHONIOENCODING = "utf-8"
+
 function Write-Step {
     param([string]$Message)
     Write-Host "`n=== $Message ===" -ForegroundColor Cyan
@@ -71,7 +79,25 @@ function Ensure-AzCli {
 
 function Ensure-Extension {
     param([string]$Name)
-    az extension add --name $Name --upgrade | Out-Null
+
+    $installed = $null
+    $installed = az extension show --name $Name --query "name" -o tsv 2>$null
+
+    if (-not [string]::IsNullOrWhiteSpace($installed)) {
+        Write-Host "Azure CLI extension '$Name' already installed."
+        return
+    }
+
+    az extension add --name $Name --allow-preview true | Out-Null
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Failed to install Azure CLI extension '$Name'. Verifying whether 'az containerapp' is already available."
+        az containerapp --help 1>$null 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Azure CLI extension '$Name' is required and could not be installed. Resolve Azure CLI extension installation issues and rerun."
+        }
+        Write-Host "Continuing because 'az containerapp' is available."
+    }
 }
 
 function Ensure-Group {
@@ -138,11 +164,56 @@ function Build-ImageIfRequested {
 
     if ($ShouldBuild) {
         Write-Step "Building image in ACR"
-        az acr build -r $RegistryName -g $GroupName -t "$ContainerImageName`:$ContainerImageTag" . | Out-Null
+        az acr build -r $RegistryName -g $GroupName -t "$ContainerImageName`:$ContainerImageTag" --file scripts/Dockerfile --no-logs . | Out-Null
     }
     else {
         Write-Host "Skipping image build. Use -BuildImage to build and push with az acr build."
     }
+}
+
+function Resolve-RegistryAuth {
+    param([string]$GroupName, [string]$RegistryName, [string]$RegistryServer)
+
+    $auth = @{
+        UseAdminCredentials = $false
+        Username = ""
+        Password = ""
+    }
+
+    if ($RegistryServer.EndsWith(".azurecr.us")) {
+        $adminEnabled = az acr show -g $GroupName -n $RegistryName --query "adminUserEnabled" -o tsv
+        if ($adminEnabled -ne "true") {
+            Write-Host "Enabling ACR admin user for Azure Government registry auth compatibility..."
+            az acr update -g $GroupName -n $RegistryName --admin-enabled true | Out-Null
+        }
+
+        $username = $null
+        $password = $null
+
+        for ($attempt = 1; $attempt -le 6; $attempt++) {
+            $username = az acr credential show -g $GroupName -n $RegistryName --query "username" -o tsv 2>$null
+            $password = az acr credential show -g $GroupName -n $RegistryName --query "passwords[0].value" -o tsv 2>$null
+
+            if (-not [string]::IsNullOrWhiteSpace($username) -and -not [string]::IsNullOrWhiteSpace($password)) {
+                break
+            }
+
+            if ($attempt -lt 6) {
+                Write-Host "Waiting for ACR admin credentials to propagate (attempt $attempt/6)..."
+                Start-Sleep -Seconds 5
+            }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($username) -or [string]::IsNullOrWhiteSpace($password)) {
+            throw "ACR credentials are empty for '$RegistryName' after enabling admin user and waiting for propagation. Verify registry state and rerun: az acr credential show -g $GroupName -n $RegistryName"
+        }
+
+        $auth.UseAdminCredentials = $true
+        $auth.Username = $username
+        $auth.Password = $password
+    }
+
+    return $auth
 }
 
 function Upsert-ContainerAppsJob {
@@ -156,48 +227,92 @@ function Upsert-ContainerAppsJob {
         [string]$ImageRef,
         [string]$ManagedIdentityResourceId,
         [string]$RegistryServer,
+        [bool]$UseRegistryAdminCredentials,
+        [string]$RegistryUsername,
+        [string]$RegistryPassword,
         [string]$SearchEndpoint,
         [string]$BlobContainerUrl,
         [string]$BlobPrefixValue
     )
 
-    $jobExists = az containerapp job show -g $GroupName -n $JobName --query "name" -o tsv 2>$null
+    $jobExists = $null
+    try {
+        $jobExists = az containerapp job show -g $GroupName -n $JobName --query "name" -o tsv 2>$null
+    } catch {}
 
     $commandArgs = "scripts/backup_ai_search_indexes.py --endpoint $SearchEndpoint --write-direct-to-blob --blob-container-url $BlobContainerUrl --blob-prefix $BlobPrefixValue"
 
     if ([string]::IsNullOrWhiteSpace($jobExists)) {
         Write-Step "Creating Container Apps Job"
-        az containerapp job create `
-            -g $GroupName -n $JobName `
-            --environment $EnvironmentName `
-            --trigger-type Schedule `
-            --cron-expression "$CronExpression" `
-            --replica-timeout $TimeoutSeconds `
-            --replica-retry-limit $RetryLimit `
-            --parallelism 1 `
-            --replica-completion-count 1 `
-            --image $ImageRef `
-            --cpu 1.0 --memory 2Gi `
-            --mi-user-assigned $ManagedIdentityResourceId `
-            --registry-server $RegistryServer `
-            --registry-identity $ManagedIdentityResourceId `
-            --command "python" `
-            --args $commandArgs | Out-Null
+        if ($UseRegistryAdminCredentials) {
+            az containerapp job create `
+                -g $GroupName -n $JobName `
+                --environment $EnvironmentName `
+                --trigger-type Schedule `
+                --cron-expression "$CronExpression" `
+                --replica-timeout $TimeoutSeconds `
+                --replica-retry-limit $RetryLimit `
+                --parallelism 1 `
+                --replica-completion-count 1 `
+                --image $ImageRef `
+                --cpu 1.0 --memory 2Gi `
+                --mi-user-assigned $ManagedIdentityResourceId `
+                --registry-server $RegistryServer `
+                --registry-username $RegistryUsername `
+                --registry-password $RegistryPassword `
+                --command "python" `
+                --args $commandArgs | Out-Null
+        }
+        else {
+            az containerapp job create `
+                -g $GroupName -n $JobName `
+                --environment $EnvironmentName `
+                --trigger-type Schedule `
+                --cron-expression "$CronExpression" `
+                --replica-timeout $TimeoutSeconds `
+                --replica-retry-limit $RetryLimit `
+                --parallelism 1 `
+                --replica-completion-count 1 `
+                --image $ImageRef `
+                --cpu 1.0 --memory 2Gi `
+                --mi-user-assigned $ManagedIdentityResourceId `
+                --registry-server $RegistryServer `
+                --registry-identity $ManagedIdentityResourceId `
+                --command "python" `
+                --args $commandArgs | Out-Null
+        }
     }
     else {
         Write-Step "Updating existing Container Apps Job"
-        az containerapp job update `
-            -g $GroupName -n $JobName `
-            --cron-expression "$CronExpression" `
-            --replica-timeout $TimeoutSeconds `
-            --replica-retry-limit $RetryLimit `
-            --image $ImageRef `
-            --cpu 1.0 --memory 2Gi `
-            --mi-user-assigned $ManagedIdentityResourceId `
-            --registry-server $RegistryServer `
-            --registry-identity $ManagedIdentityResourceId `
-            --command "python" `
-            --args $commandArgs | Out-Null
+        if ($UseRegistryAdminCredentials) {
+            az containerapp job update `
+                -g $GroupName -n $JobName `
+                --cron-expression "$CronExpression" `
+                --replica-timeout $TimeoutSeconds `
+                --replica-retry-limit $RetryLimit `
+                --image $ImageRef `
+                --cpu 1.0 --memory 2Gi `
+                --mi-user-assigned $ManagedIdentityResourceId `
+                --registry-server $RegistryServer `
+                --registry-username $RegistryUsername `
+                --registry-password $RegistryPassword `
+                --command "python" `
+                --args $commandArgs | Out-Null
+        }
+        else {
+            az containerapp job update `
+                -g $GroupName -n $JobName `
+                --cron-expression "$CronExpression" `
+                --replica-timeout $TimeoutSeconds `
+                --replica-retry-limit $RetryLimit `
+                --image $ImageRef `
+                --cpu 1.0 --memory 2Gi `
+                --mi-user-assigned $ManagedIdentityResourceId `
+                --registry-server $RegistryServer `
+                --registry-identity $ManagedIdentityResourceId `
+                --command "python" `
+                --args $commandArgs | Out-Null
+        }
     }
 }
 
@@ -225,14 +340,18 @@ $acrLoginServer = az acr show -g $ResourceGroupName -n $resolvedAcrName --query 
 $managedIdentityId = az identity show -g $ResourceGroupName -n $ManagedIdentityName --query id -o tsv
 $managedIdentityPrincipalId = az identity show -g $ResourceGroupName -n $ManagedIdentityName --query principalId -o tsv
 
+$registryAuth = Resolve-RegistryAuth -GroupName $ResourceGroupName -RegistryName $resolvedAcrName -RegistryServer $acrLoginServer
+
 $searchResourceId = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.Search/searchServices/$SearchServiceName"
 $storageResourceId = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.Storage/storageAccounts/$StorageAccountName"
+$acrResourceId = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.ContainerRegistry/registries/$resolvedAcrName"
 $searchEndpoint = "https://$SearchServiceName.search.azure.us"
 $blobContainerUrl = "https://$StorageAccountName.blob.core.usgovcloudapi.net/$StorageContainerName"
 
 Write-Step "Applying RBAC"
 New-RoleAssignment -PrincipalObjectId $managedIdentityPrincipalId -RoleName "Search Index Data Reader" -Scope $searchResourceId
 New-RoleAssignment -PrincipalObjectId $managedIdentityPrincipalId -RoleName "Storage Blob Data Contributor" -Scope $storageResourceId
+New-RoleAssignment -PrincipalObjectId $managedIdentityPrincipalId -RoleName "AcrPull" -Scope $acrResourceId
 
 Build-ImageIfRequested -ShouldBuild $BuildImage.IsPresent -RegistryName $resolvedAcrName -GroupName $ResourceGroupName -ContainerImageName $ImageName -ContainerImageTag $ImageTag
 
@@ -248,6 +367,9 @@ Upsert-ContainerAppsJob `
     -ImageRef $imageRef `
     -ManagedIdentityResourceId $managedIdentityId `
     -RegistryServer $acrLoginServer `
+    -UseRegistryAdminCredentials $registryAuth.UseAdminCredentials `
+    -RegistryUsername $registryAuth.Username `
+    -RegistryPassword $registryAuth.Password `
     -SearchEndpoint $searchEndpoint `
     -BlobContainerUrl $blobContainerUrl `
     -BlobPrefixValue $BlobPrefix
