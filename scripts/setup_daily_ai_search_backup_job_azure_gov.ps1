@@ -52,7 +52,10 @@ param(
     [switch]$BuildImage,
 
     [Parameter(Mandatory = $false)]
-    [switch]$SetAzureCloud
+    [switch]$SetAzureCloud,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$SkipSmokeTest
 )
 
 $ErrorActionPreference = "Stop"
@@ -237,6 +240,7 @@ function Upsert-ContainerAppsJob {
         [int]$RetryLimit,
         [string]$ImageRef,
         [string]$ManagedIdentityResourceId,
+        [string]$ManagedIdentityClientId,
         [string]$RegistryServer,
         [bool]$UseRegistryAdminCredentials,
         [string]$RegistryUsername,
@@ -251,7 +255,7 @@ function Upsert-ContainerAppsJob {
         $jobExists = az containerapp job show -g $GroupName -n $JobName --query "name" -o tsv 2>$null
     } catch {}
 
-    $commandArgs = "scripts/backup_ai_search_indexes.py --endpoint $SearchEndpoint --write-direct-to-blob --blob-container-url $BlobContainerUrl --blob-prefix $BlobPrefixValue"
+    $commandArgs = "python scripts/backup_ai_search_indexes.py --endpoint $SearchEndpoint --write-direct-to-blob --blob-container-url $BlobContainerUrl --blob-prefix $BlobPrefixValue"
 
     if ([string]::IsNullOrWhiteSpace($jobExists)) {
         Write-Step "Creating Container Apps Job"
@@ -271,7 +275,8 @@ function Upsert-ContainerAppsJob {
                 --registry-server $RegistryServer `
                 --registry-username $RegistryUsername `
                 --registry-password $RegistryPassword `
-                --command "python" `
+                --command "/bin/sh -c" `
+                --set-env-vars "AZURE_CLIENT_ID=$ManagedIdentityClientId" `
                 --args $commandArgs | Out-Null
         }
         else {
@@ -289,7 +294,8 @@ function Upsert-ContainerAppsJob {
                 --mi-user-assigned $ManagedIdentityResourceId `
                 --registry-server $RegistryServer `
                 --registry-identity $ManagedIdentityResourceId `
-                --command "python" `
+                --command "/bin/sh -c" `
+                --set-env-vars "AZURE_CLIENT_ID=$ManagedIdentityClientId" `
                 --args $commandArgs | Out-Null
         }
     }
@@ -307,7 +313,8 @@ function Upsert-ContainerAppsJob {
                 --registry-server $RegistryServer `
                 --registry-username $RegistryUsername `
                 --registry-password $RegistryPassword `
-                --command "python" `
+                --command "/bin/sh -c" `
+                --set-env-vars "AZURE_CLIENT_ID=$ManagedIdentityClientId" `
                 --args $commandArgs | Out-Null
         }
         else {
@@ -321,10 +328,134 @@ function Upsert-ContainerAppsJob {
                 --mi-user-assigned $ManagedIdentityResourceId `
                 --registry-server $RegistryServer `
                 --registry-identity $ManagedIdentityResourceId `
-                --command "python" `
+                --command "/bin/sh -c" `
+                --set-env-vars "AZURE_CLIENT_ID=$ManagedIdentityClientId" `
                 --args $commandArgs | Out-Null
         }
     }
+}
+
+function Ensure-ContainerAppsJobShellCommandArray {
+    param(
+        [string]$GroupName,
+        [string]$JobName,
+        [string]$CommandArgs
+    )
+
+    $job = az containerapp job show -g $GroupName -n $JobName -o json | ConvertFrom-Json
+    $jobId = $job.id
+    $container = $job.properties.template.containers[0]
+
+    if (
+        $container.command.Count -eq 2 -and
+        $container.command[0] -eq "/bin/sh" -and
+        $container.command[1] -eq "-c" -and
+        $container.args.Count -eq 1 -and
+        $container.args[0] -eq $CommandArgs
+    ) {
+        return
+    }
+
+    $resourceManagerEndpoint = az cloud show --query "endpoints.resourceManager" -o tsv
+    $armResource = az cloud show --query "endpoints.activeDirectoryResourceId" -o tsv
+    $uri = "$($resourceManagerEndpoint.TrimEnd('/'))$jobId?api-version=2024-03-01"
+
+    $patchBody = @{
+        properties = @{
+            template = @{
+                containers = @(
+                    @{
+                        name = $container.name
+                        image = $container.image
+                        resources = @{
+                            cpu = $container.resources.cpu
+                            memory = $container.resources.memory
+                        }
+                        command = @("/bin/sh", "-c")
+                        args = @($CommandArgs)
+                    }
+                )
+            }
+        }
+    }
+
+    $tmpFile = Join-Path $env:TEMP "job-command-patch-$JobName.json"
+    $patchBody | ConvertTo-Json -Depth 30 | Set-Content -Path $tmpFile -Encoding utf8
+
+    az rest `
+        --method patch `
+        --uri $uri `
+        --resource $armResource `
+        --headers "Content-Type=application/json" `
+        --body "@$tmpFile" | Out-Null
+}
+
+function Invoke-PostSetupSmokeTest {
+    param(
+        [string]$GroupName,
+        [string]$JobName,
+        [string]$StorageAccount,
+        [string]$StorageContainer,
+        [string]$BlobPrefixValue,
+        [int]$TimeoutSeconds = 900,
+        [int]$PollIntervalSeconds = 10
+    )
+
+    Write-Step "Running post-setup smoke test"
+
+    $executionName = az containerapp job start -g $GroupName -n $JobName --query name -o tsv
+    if ([string]::IsNullOrWhiteSpace($executionName)) {
+        throw "Smoke test failed: could not start job execution."
+    }
+
+    Write-Host "Started smoke-test execution: $executionName"
+
+    $executionStartTime = [DateTime]::UtcNow
+    $deadline = $executionStartTime.AddSeconds($TimeoutSeconds)
+    $finalStatus = ""
+    $terminalStatuses = @("Succeeded", "Failed", "Stopped", "Canceled")
+
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $finalStatus = az containerapp job execution show `
+            -g $GroupName `
+            -n $JobName `
+            --job-execution-name $executionName `
+            --query "properties.status" `
+            -o tsv
+
+        if ($terminalStatuses -contains $finalStatus) {
+            break
+        }
+
+        Start-Sleep -Seconds $PollIntervalSeconds
+    }
+
+    if ($finalStatus -ne "Succeeded") {
+        throw "Smoke test failed: execution '$executionName' ended with status '$finalStatus'."
+    }
+
+    $manifestCandidates = az storage blob list `
+        --account-name $StorageAccount `
+        --container-name $StorageContainer `
+        --auth-mode login `
+        --num-results 5000 `
+        --query "[?contains(name, '$BlobPrefixValue/') && ends_with(name, '/manifest.json')].{name:name,lastModified:properties.lastModified}" `
+        -o json | ConvertFrom-Json
+
+    if (-not $manifestCandidates -or $manifestCandidates.Count -eq 0) {
+        throw "Smoke test failed: no manifest.json files found under blob prefix '$BlobPrefixValue'."
+    }
+
+    $latestManifest = $manifestCandidates |
+        Sort-Object { [DateTime]::Parse($_.lastModified) } -Descending |
+        Select-Object -First 1
+
+    $latestManifestTime = [DateTime]::Parse($latestManifest.lastModified).ToUniversalTime()
+    if ($latestManifestTime -lt $executionStartTime.AddMinutes(-1)) {
+        throw "Smoke test failed: latest manifest '$($latestManifest.name)' is older than this smoke-test run."
+    }
+
+    Write-Host "Smoke test passed: execution '$executionName' succeeded and wrote '$($latestManifest.name)'." -ForegroundColor Green
 }
 
 Write-Step "Validating prerequisites"
@@ -350,6 +481,7 @@ Ensure-ManagedIdentity -GroupName $ResourceGroupName -IdentityName $ManagedIdent
 $acrLoginServer = az acr show -g $ResourceGroupName -n $resolvedAcrName --query loginServer -o tsv
 $managedIdentityId = az identity show -g $ResourceGroupName -n $ManagedIdentityName --query id -o tsv
 $managedIdentityPrincipalId = az identity show -g $ResourceGroupName -n $ManagedIdentityName --query principalId -o tsv
+$managedIdentityClientId = az identity show -g $ResourceGroupName -n $ManagedIdentityName --query clientId -o tsv
 
 $registryAuth = Resolve-RegistryAuth -GroupName $ResourceGroupName -RegistryName $resolvedAcrName -RegistryServer $acrLoginServer
 
@@ -361,6 +493,7 @@ $blobContainerUrl = "https://$StorageAccountName.blob.core.usgovcloudapi.net/$St
 
 Write-Step "Applying RBAC"
 New-RoleAssignment -PrincipalObjectId $managedIdentityPrincipalId -RoleName "Search Index Data Reader" -Scope $searchResourceId
+New-RoleAssignment -PrincipalObjectId $managedIdentityPrincipalId -RoleName "Search Service Contributor" -Scope $searchResourceId
 New-RoleAssignment -PrincipalObjectId $managedIdentityPrincipalId -RoleName "Storage Blob Data Contributor" -Scope $storageResourceId
 New-RoleAssignment -PrincipalObjectId $managedIdentityPrincipalId -RoleName "AcrPull" -Scope $acrResourceId
 
@@ -377,6 +510,7 @@ Upsert-ContainerAppsJob `
     -RetryLimit $ReplicaRetryLimit `
     -ImageRef $imageRef `
     -ManagedIdentityResourceId $managedIdentityId `
+    -ManagedIdentityClientId $managedIdentityClientId `
     -RegistryServer $acrLoginServer `
     -UseRegistryAdminCredentials $registryAuth.UseAdminCredentials `
     -RegistryUsername $registryAuth.Username `
@@ -384,6 +518,24 @@ Upsert-ContainerAppsJob `
     -SearchEndpoint $searchEndpoint `
     -BlobContainerUrl $blobContainerUrl `
     -BlobPrefixValue $BlobPrefix
+
+$commandArgs = "python scripts/backup_ai_search_indexes.py --endpoint $searchEndpoint --write-direct-to-blob --blob-container-url $blobContainerUrl --blob-prefix $BlobPrefix"
+Ensure-ContainerAppsJobShellCommandArray `
+    -GroupName $ResourceGroupName `
+    -JobName $ContainerAppsJobName `
+    -CommandArgs $commandArgs
+
+if (-not $SkipSmokeTest.IsPresent) {
+    Invoke-PostSetupSmokeTest `
+        -GroupName $ResourceGroupName `
+        -JobName $ContainerAppsJobName `
+        -StorageAccount $StorageAccountName `
+        -StorageContainer $StorageContainerName `
+        -BlobPrefixValue $BlobPrefix
+}
+else {
+    Write-Host "Skipping post-setup smoke test because -SkipSmokeTest was provided."
+}
 
 Write-Step "Setup complete"
 Write-Host "Container Apps Job: $ContainerAppsJobName"

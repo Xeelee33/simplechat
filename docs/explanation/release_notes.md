@@ -1,8 +1,38 @@
 <!-- BEGIN release_notes.md BLOCK -->
 
-This page tracks notable Simple Chat releases and organizes the detailed change log by version. The timeline below provides a quick visual overview of the current release progression through v0.241.011, and the per-version entries continue immediately after it.
+This page tracks notable Simple Chat releases and organizes the detailed change log by version. The timeline below provides a quick visual overview of the current release progression through v0.241.025, and the per-version entries continue immediately after it.
 
 For feature-focused and fix-focused drill-downs by version, see [Features by Version](/explanation/features/) and [Fixes by Version](/explanation/fixes/).
+
+### **(v0.241.025)**
+
+#### Bug Fixes
+
+*   **Azure Gov Backup Job Post-Setup Smoke Test Validation**
+    *   Added an automatic post-setup smoke test to the Azure Government backup job provisioning flow so setup now immediately starts one execution and waits for a terminal result.
+    *   Added artifact validation that checks for a freshly written `manifest.json` under the configured blob prefix, ensuring setup verifies both job success and backup output creation end-to-end.
+    *   Added an opt-out switch (`-SkipSmokeTest`) for scenarios where provisioning should complete without running validation execution.
+    *   (Ref: `scripts/setup_daily_ai_search_backup_job_azure_gov.ps1`, `application/single_app/config.py`)
+
+### **(v0.241.024)**
+
+#### Bug Fixes
+
+*   **Azure Gov Scheduled Backup Job Execution and RBAC Corrections**
+    *   Fixed recurring scheduled execution failures caused by shell command tokenization mismatch in Container Apps Job templates by adding post-provision command-array correction logic to enforce `command: ["/bin/sh", "-c"]` semantics.
+    *   Added `AZURE_CLIENT_ID` environment variable wiring (user-assigned managed identity client ID) so `DefaultAzureCredential` resolves the intended identity consistently in the backup container runtime.
+    *   Added `Search Service Contributor` role assignment for the backup job identity to support index-definition read operations (`get_index(...)`) required by the backup workflow, resolving search authorization failures observed after startup.
+    *   (Ref: `scripts/setup_daily_ai_search_backup_job_azure_gov.ps1`, `scripts/debug_containerapp_job_execution_logs.ps1`, `application/single_app/config.py`)
+
+### **(v0.241.022)**
+
+#### Bug Fixes
+
+*   **Azure Gov Backup Job Runtime and Diagnostics Stabilization**
+    *   Fixed repeated Azure Container Apps Job startup failures caused by command/argument formatting drift during job updates, and aligned provisioning to a shell-based execution pattern compatible with the observed CLI behavior in Azure Government.
+    *   Added/iterated a reusable execution log helper that reliably resolves workspace context and retrieves Container Apps console/system logs in Azure Government, including API-version/cloud endpoint compatibility handling and schema-correct KQL projections.
+    *   Used the new diagnostics path to validate the real runtime failure mode (`python: can't open file ...`) and drive corrective updates to backup-job provisioning logic.
+    *   (Ref: `scripts/setup_daily_ai_search_backup_job_azure_gov.ps1`, `scripts/debug_containerapp_job_execution_logs.ps1`, `scripts/Dockerfile`, `application/single_app/config.py`)
 
 ### **(v0.241.011)**
 
