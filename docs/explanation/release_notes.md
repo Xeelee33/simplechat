@@ -1,16 +1,46 @@
 <!-- BEGIN release_notes.md BLOCK -->
 
-This page tracks notable Simple Chat releases and organizes the detailed change log by version. The timeline below provides a quick visual overview of the current release progression through v0.241.030, and the per-version entries continue immediately after it.
+This page tracks notable Simple Chat releases and organizes the detailed change log by version. The timeline below provides a quick visual overview of the current release progression through v0.241.034, and the per-version entries continue immediately after it.
 
 For feature-focused and fix-focused drill-downs by version, see [Features by Version](/explanation/features/) and [Fixes by Version](/explanation/fixes/).
 
-### **(v0.241.030)**
+### **(v0.241.034)**
 
 #### Bug Fixes
 
-*   **Azure Government Managed Identity Endpoint Diagnostics Notebook**
-    *   Added a dedicated diagnostics notebook to isolate and troubleshoot managed identity failures for Azure Government AOAI/Foundry model endpoint calls in deployed runtimes.
-    *   Notebook includes checks for identity endpoint environment wiring, token acquisition with managed identity, direct REST invocation against deployment `chat/completions`, and SDK parity testing.
+*   **Managed Identity Type Enforcement for System-Assigned Endpoints**
+    *   Hardened managed-identity credential construction so system-assigned endpoint configurations no longer pass a stale `managed_identity_client_id` value into Azure identity clients.
+    *   Updated model test, streaming chat endpoint resolution, and Foundry sync credential helper paths to only require and pass `managed_identity_client_id` when `managed_identity_type` is explicitly `user_assigned`.
+    *   This prevents accidental user-assigned identity targeting when admins intend to use App Service system-assigned identity.
+    *   (Ref: `application/single_app/route_backend_models.py`, `application/single_app/route_backend_chats.py`, `application/single_app/foundry_agent_runtime.py`, `application/single_app/config.py`)
+
+### **(v0.241.033)**
+
+#### Bug Fixes
+
+*   **Managed Identity Model Test Error Diagnostics and Validation**
+    *   Improved model test diagnostics by logging sanitized exception message text alongside exception type so managed identity authentication failures are easier to triage from production logs.
+    *   Added explicit validation for user-assigned managed identity configuration, returning clear validation failures when `managed_identity_client_id` is missing for `user_assigned` endpoints.
+    *   Added targeted managed-identity authentication error handling in model connection tests to return actionable guidance for identity assignment and Azure OpenAI RBAC verification.
+    *   (Ref: `application/single_app/route_backend_models.py`, `application/single_app/route_backend_chats.py`, `application/single_app/config.py`)
+
+### **(v0.241.032)**
+
+#### Bug Fixes
+
+*   **Azure Government Inference Scope Resolution for OpenAI Endpoints**
+    *   Fixed token scope selection for model endpoints using `*.openai.azure.us` so inference calls use Cognitive Services data-plane audience (`https://cognitiveservices.azure.us/.default`) even when provider metadata is set to Foundry.
+    *   Added endpoint-aware inference scope resolution so Foundry scopes (`https://ai.azure.us/.default`) are used only for Foundry project-style endpoints, avoiding audience mismatch during Azure OpenAI deployment calls.
+    *   Applied the same endpoint-aware scope behavior to streaming chat multi-endpoint client resolution for consistency between test and runtime execution paths.
+    *   (Ref: `application/single_app/route_backend_models.py`, `application/single_app/route_backend_chats.py`, `application/single_app/config.py`)
+
+### **(v0.241.031)**
+
+#### Bug Fixes
+
+*   **Managed Identity Diagnostics Notebook PASS/FAIL Summary Output**
+    *   Enhanced the Azure Government managed-identity diagnostics notebook with a final summary cell that reports a consolidated PASS/FAIL outcome across token acquisition, direct REST invocation, and SDK parity checks.
+    *   This provides faster triage during endpoint-auth troubleshooting by showing a single terminal status after running the notebook workflow.
     *   (Ref: `functional_tests/foundry_managed_identity_gov_diagnostics.ipynb`, `application/single_app/config.py`)
 
 ### **(v0.241.029)**
