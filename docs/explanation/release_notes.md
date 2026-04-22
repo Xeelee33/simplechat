@@ -1,8 +1,27 @@
 <!-- BEGIN release_notes.md BLOCK -->
 
-This page tracks notable Simple Chat releases and organizes the detailed change log by version. The timeline below provides a quick visual overview of the current release progression through v0.241.025, and the per-version entries continue immediately after it.
+This page tracks notable Simple Chat releases and organizes the detailed change log by version. The timeline below provides a quick visual overview of the current release progression through v0.241.030, and the per-version entries continue immediately after it.
 
 For feature-focused and fix-focused drill-downs by version, see [Features by Version](/explanation/features/) and [Fixes by Version](/explanation/fixes/).
+
+### **(v0.241.030)**
+
+#### Bug Fixes
+
+*   **Azure Government Managed Identity Endpoint Diagnostics Notebook**
+    *   Added a dedicated diagnostics notebook to isolate and troubleshoot managed identity failures for Azure Government AOAI/Foundry model endpoint calls in deployed runtimes.
+    *   Notebook includes checks for identity endpoint environment wiring, token acquisition with managed identity, direct REST invocation against deployment `chat/completions`, and SDK parity testing.
+    *   (Ref: `functional_tests/foundry_managed_identity_gov_diagnostics.ipynb`, `application/single_app/config.py`)
+
+### **(v0.241.029)**
+
+#### Bug Fixes
+
+*   **Foundry Managed Identity Authentication Path Hardening**
+    *   Fixed model-endpoint and Foundry runtime authentication flows so `managed_identity` mode now uses managed identity credentials directly instead of falling through broader default credential chains.
+    *   Added cloud-alias and endpoint-aware Foundry scope handling (`government`, `usgovernment`, `usgov`, `gcc`, plus sovereign endpoint detection) to avoid incorrect token audiences in Azure Government deployments.
+    *   Improved authority resolution compatibility for Foundry Government cloud aliases so tenant token requests align with `.us` authority endpoints.
+    *   (Ref: `application/single_app/route_backend_models.py`, `application/single_app/route_backend_chats.py`, `application/single_app/foundry_agent_runtime.py`, `application/single_app/config.py`)
 
 ### **(v0.241.025)**
 

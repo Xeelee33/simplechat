@@ -10,7 +10,7 @@ from functions_settings import *
 from foundry_agent_runtime import list_foundry_agents_from_endpoint, list_new_foundry_agents_from_endpoint, resolve_foundry_project_base, resolve_foundry_project_api_version, build_project_credential, resolve_authority
 from functions_appinsights import log_event
 from swagger_wrapper import swagger_route, get_auth_security
-from azure.identity import DefaultAzureCredential, ClientSecretCredential, get_bearer_token_provider
+from azure.identity import DefaultAzureCredential, ManagedIdentityCredential, ClientSecretCredential, get_bearer_token_provider
 import re
 import requests
 
@@ -35,6 +35,9 @@ def register_route_backend_models(app):
     def log_models_exception(message, exception, extra=None, level=logging.ERROR):
         properties = dict(extra or {})
         properties["exception_type"] = type(exception).__name__
+        exception_message = str(exception or "").strip()
+        if exception_message:
+            properties["exception_message"] = exception_message[:400]
         log_event(
             f"[Models] {message}",
             extra=properties,
@@ -156,20 +159,42 @@ def register_route_backend_models(app):
             "authority": auth.get("custom_authority") or "",
         }
 
-    def resolve_foundry_scope(auth_settings):
-        management_cloud = (auth_settings.get("management_cloud") or "public").lower()
-        if management_cloud == "government":
+    def resolve_foundry_scope(auth_settings, endpoint=None):
+        management_cloud = str(auth_settings.get("management_cloud") or "public").lower()
+        if management_cloud in ("government", "usgovernment", "usgov", "gcc"):
             return "https://ai.azure.us/.default"
+        if management_cloud == "china":
+            return "https://ai.azure.cn/.default"
+        if management_cloud == "germany":
+            return "https://ai.azure.de/.default"
         if management_cloud == "custom":
             custom_scope = (auth_settings.get("foundry_scope") or "").strip()
             if not custom_scope:
                 raise ValueError("Foundry scope is required for custom cloud configurations.")
             return custom_scope
+
+        endpoint_value = str(endpoint or auth_settings.get("endpoint") or "").lower()
+        if "azure.us" in endpoint_value:
+            return "https://ai.azure.us/.default"
+        if "azure.cn" in endpoint_value:
+            return "https://ai.azure.cn/.default"
+        if "azure.de" in endpoint_value:
+            return "https://ai.azure.de/.default"
+
         return "https://ai.azure.com/.default"
+
+    def resolve_inference_scope(provider, auth_settings, endpoint=None):
+        normalized_provider = str(provider or "aoai").lower()
+        endpoint_value = str(endpoint or "").lower()
+
+        if normalized_provider in ("aifoundry", "new_foundry") and ".openai." not in endpoint_value:
+            return resolve_foundry_scope(auth_settings, endpoint=endpoint)
+
+        return cognitive_services_scope
 
     def build_foundry_token(auth_settings):
         management_cloud = (auth_settings.get("management_cloud") or "public").lower()
-        scope = resolve_foundry_scope(auth_settings)
+        scope = resolve_foundry_scope(auth_settings, endpoint=auth_settings.get("endpoint"))
         auth_type = (auth_settings.get("type") or "managed_identity").lower()
         log_models_debug(f"Foundry token auth_type={auth_type}, scope={scope}, cloud={management_cloud}")
         credential = build_project_credential(auth_settings)
@@ -193,8 +218,13 @@ def register_route_backend_models(app):
             log_models_debug("API key auth requested for model discovery (not supported).")
             raise ValueError("API key auth is not supported for model discovery.")
         else:
-            managed_identity_client_id = auth_settings.get("managed_identity_client_id") or None
-            credential = DefaultAzureCredential(managed_identity_client_id=managed_identity_client_id)
+            managed_identity_type = str(auth_settings.get("managed_identity_type") or "system_assigned").lower()
+            managed_identity_client_id = None
+            if managed_identity_type == "user_assigned":
+                managed_identity_client_id = str(auth_settings.get("managed_identity_client_id") or "").strip() or None
+                if not managed_identity_client_id:
+                    raise ValueError("Managed identity client ID is required for user-assigned managed identity.")
+            credential = ManagedIdentityCredential(client_id=managed_identity_client_id)
 
         if AZURE_ENVIRONMENT in ("usgovernment", "custom"):
             return CognitiveServicesManagementClient(
@@ -230,12 +260,15 @@ def register_route_backend_models(app):
                 authority=authority_override
             )
         else:
-            managed_identity_client_id = auth_settings.get("managed_identity_client_id") or None
-            credential = DefaultAzureCredential(managed_identity_client_id=managed_identity_client_id)
+            managed_identity_type = str(auth_settings.get("managed_identity_type") or "system_assigned").lower()
+            managed_identity_client_id = None
+            if managed_identity_type == "user_assigned":
+                managed_identity_client_id = str(auth_settings.get("managed_identity_client_id") or "").strip() or None
+                if not managed_identity_client_id:
+                    raise ValueError("Managed identity client ID is required for user-assigned managed identity.")
+            credential = ManagedIdentityCredential(client_id=managed_identity_client_id)
 
-        scope = cognitive_services_scope
-        if provider in ("aifoundry", "new_foundry"):
-            scope = resolve_foundry_scope(auth_settings)
+        scope = resolve_inference_scope(provider, auth_settings, endpoint=endpoint)
         log_models_debug(f"Inference token scope={scope} provider={provider}")
         token_provider = get_bearer_token_provider(credential, scope)
         return AzureOpenAI(
@@ -436,6 +469,23 @@ def register_route_backend_models(app):
                 400,
             )
         except Exception as e:
+            exception_type = type(e).__name__
+            if exception_type in ("AuthenticationError", "ClientAuthenticationError", "CredentialUnavailableError"):
+                log_models_exception(
+                    "Test model managed identity authentication failed",
+                    e,
+                    extra={
+                        "scope": scope,
+                        "auth_type": auth_type,
+                        "endpoint": endpoint,
+                        "provider": provider,
+                    },
+                    level=logging.WARNING,
+                )
+                return build_safe_error_response(
+                    "Managed identity authentication failed. Verify the app identity assignment, managed identity client ID (for user-assigned identity), and Azure OpenAI RBAC on the target resource.",
+                    400,
+                )
             log_models_exception("Test model connection failed", e, extra={"scope": scope})
             return build_safe_error_response(
                 "Unable to test the model connection right now. Try again later or contact an administrator.",
