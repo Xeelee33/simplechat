@@ -14,10 +14,12 @@ from azure.identity import (
     AzureAuthorityHosts,
     ClientSecretCredential as SyncClientSecretCredential,
     DefaultAzureCredential as SyncDefaultAzureCredential,
+    ManagedIdentityCredential as SyncManagedIdentityCredential,
 )
 from azure.identity.aio import (  # type: ignore
     ClientSecretCredential as AsyncClientSecretCredential,
     DefaultAzureCredential as AsyncDefaultAzureCredential,
+    ManagedIdentityCredential as AsyncManagedIdentityCredential,
 )
 from semantic_kernel.agents import AzureAIAgent
 from semantic_kernel.contents.chat_message_content import ChatMessageContent
@@ -625,11 +627,8 @@ def _build_async_credential(
 
     if auth_type == "managed_identity":
         if managed_identity_type == "user_assigned" and managed_identity_client_id:
-            return AsyncDefaultAzureCredential(
-                authority=authority,
-                managed_identity_client_id=managed_identity_client_id,
-            )
-        return AsyncDefaultAzureCredential(authority=authority)
+            return AsyncManagedIdentityCredential(client_id=managed_identity_client_id)
+        return AsyncManagedIdentityCredential()
 
     # Fall back to default chained credentials (managed identity, CLI, etc.)
     return AsyncDefaultAzureCredential(authority=authority)
@@ -1300,8 +1299,9 @@ def resolve_foundry_project_api_version(api_version):
     return "v1"
 
 def resolve_authority(auth_settings):
+    
     management_cloud = (auth_settings.get("management_cloud") or "public").lower()
-    if management_cloud == "government":
+    if management_cloud in ("government", "usgovernment", "usgov", "gcc"):
         return "https://login.microsoftonline.us"
     if management_cloud == "custom":
         custom_authority = auth_settings.get("custom_authority") or ""
@@ -1322,8 +1322,13 @@ def build_project_credential(auth_settings):
         )
     if auth_type == "api_key":
         raise ValueError("API key auth is not supported for Foundry project discovery.")
-    managed_identity_client_id = auth_settings.get("managed_identity_client_id") or None
-    return SyncDefaultAzureCredential(managed_identity_client_id=managed_identity_client_id)
+    managed_identity_type = str(auth_settings.get("managed_identity_type") or "system_assigned").lower()
+    managed_identity_client_id = None
+    if managed_identity_type == "user_assigned":
+        managed_identity_client_id = str(auth_settings.get("managed_identity_client_id") or "").strip() or None
+        if not managed_identity_client_id:
+            raise ValueError("Managed identity client ID is required for user-assigned managed identity.")
+    return SyncManagedIdentityCredential(client_id=managed_identity_client_id)
 
 def list_new_foundry_agents_from_project(endpoint_cfg):
     connection = endpoint_cfg.get("connection", {}) or {}

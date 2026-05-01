@@ -43,7 +43,7 @@ from functions_notifications import create_chat_response_notification
 from functions_activity_logging import log_chat_activity, log_conversation_creation, log_token_usage
 from flask import current_app
 from swagger_wrapper import swagger_route, get_auth_security
-from azure.identity import ClientSecretCredential, DefaultAzureCredential, get_bearer_token_provider
+from azure.identity import ClientSecretCredential, DefaultAzureCredential, ManagedIdentityCredential, get_bearer_token_provider
 from functions_keyvault import SecretReturnType, keyvault_model_endpoint_get_helper
 from functions_message_artifacts import (
     build_agent_citation_artifact_documents,
@@ -5481,6 +5481,10 @@ async def run_tabular_analysis_with_multi_file_support(user_question, tabular_fi
 def resolve_foundry_scope_for_auth(auth_settings, endpoint=None):
     """Resolve the correct scope for Foundry-backed inference authentication."""
     auth_settings = auth_settings or {}
+    endpoint_value = str(endpoint or '').lower()
+    if '.openai.' in endpoint_value:
+        return cognitive_services_scope
+
     custom_scope = str(auth_settings.get('foundry_scope') or '').strip()
     if custom_scope:
         return custom_scope
@@ -5493,7 +5497,6 @@ def resolve_foundry_scope_for_auth(auth_settings, endpoint=None):
     if management_cloud == 'germany':
         return 'https://ai.azure.de/.default'
 
-    endpoint_value = str(endpoint or '').lower()
     if 'azure.us' in endpoint_value:
         return 'https://ai.azure.us/.default'
     if 'azure.cn' in endpoint_value:
@@ -5551,8 +5554,13 @@ def build_streaming_multi_endpoint_client(auth_settings, provider, endpoint, api
             authority=resolve_authority(auth_settings),
         )
     else:
-        managed_identity_client_id = auth_settings.get('managed_identity_client_id') or None
-        credential = DefaultAzureCredential(managed_identity_client_id=managed_identity_client_id)
+        managed_identity_type = str(auth_settings.get('managed_identity_type') or 'system_assigned').lower()
+        managed_identity_client_id = None
+        if managed_identity_type == 'user_assigned':
+            managed_identity_client_id = str(auth_settings.get('managed_identity_client_id') or '').strip() or None
+            if not managed_identity_client_id:
+                raise ValueError('Selected model endpoint is configured for user-assigned managed identity but no client ID is set.')
+        credential = ManagedIdentityCredential(client_id=managed_identity_client_id)
 
     scope = cognitive_services_scope
     if normalized_provider in ('aifoundry', 'new_foundry'):
