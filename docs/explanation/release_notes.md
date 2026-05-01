@@ -1,8 +1,18 @@
 <!-- BEGIN release_notes.md BLOCK -->
 
-This page tracks notable Simple Chat releases and organizes the detailed change log by version. The timeline below provides a quick visual overview of the current release progression through v0.241.034, and the per-version entries continue immediately after it.
+This page tracks notable Simple Chat releases and organizes the detailed change log by version. The timeline below provides a quick visual overview of the current release progression through v0.241.035, and the per-version entries continue immediately after it.
 
 For feature-focused and fix-focused drill-downs by version, see [Features by Version](/explanation/features/) and [Fixes by Version](/explanation/fixes/).
+
+### **(v0.241.035)**
+
+#### Bug Fixes
+
+*   **Foundry Model Fetch Scope Resolution for Sovereign Endpoints**
+    *   Fixed Foundry model-fetch token acquisition so scope resolution now receives explicit endpoint context during deployment discovery calls.
+    *   This prevents incorrect fallback to public-cloud Foundry scope (`https://ai.azure.com/.default`) when endpoint URLs are sovereign (for example `*.azure.us`) and `management_cloud` is unset or defaults to `public`.
+    *   Azure Government Foundry fetch flows now resolve to the expected sovereign token audience (`https://ai.azure.us/.default`) for managed-identity token acquisition.
+    *   (Ref: `application/single_app/route_backend_models.py`, `application/single_app/config.py`)
 
 ### **(v0.241.034)**
 

@@ -21,7 +21,23 @@ def _get_configured_models(settings, setting_key):
 
 
 def _is_foundry_project_endpoint(endpoint):
-    return 'services.ai.azure.com' in (endpoint or '').lower()
+    endpoint_value = (endpoint or '').lower()
+    return any(domain in endpoint_value for domain in (
+        'services.ai.azure.com',
+        'services.ai.azure.us',
+        'services.ai.azure.cn',
+        'services.ai.azure.de',
+    ))
+
+
+def _resolve_foundry_discovery_endpoint(endpoint, project_name):
+    endpoint_value = str(endpoint or "").strip()
+    if not endpoint_value:
+        return endpoint_value
+    normalized = endpoint_value.lower()
+    if ".openai." in normalized and project_name:
+        return endpoint_value.replace(".openai.", ".services.ai.")
+    return endpoint_value
 
 
 def register_route_backend_models(app):
@@ -192,9 +208,10 @@ def register_route_backend_models(app):
 
         return cognitive_services_scope
 
-    def build_foundry_token(auth_settings):
+    def build_foundry_token(auth_settings, endpoint=None):
         management_cloud = (auth_settings.get("management_cloud") or "public").lower()
-        scope = resolve_foundry_scope(auth_settings, endpoint=auth_settings.get("endpoint"))
+        resolved_endpoint = endpoint or auth_settings.get("endpoint")
+        scope = resolve_foundry_scope(auth_settings, endpoint=resolved_endpoint)
         auth_type = (auth_settings.get("type") or "managed_identity").lower()
         log_models_debug(f"Foundry token auth_type={auth_type}, scope={scope}, cloud={management_cloud}")
         credential = build_project_credential(auth_settings)
@@ -286,7 +303,7 @@ def register_route_backend_models(app):
             log_models_debug("API key auth requested for Foundry project discovery (not supported).")
             raise ValueError("API key auth is not supported for Foundry project model discovery.")
 
-        token = build_foundry_token(auth_settings)
+        token = build_foundry_token(auth_settings, endpoint=endpoint)
         headers = {
             "Authorization": f"Bearer {token}"
         }
@@ -337,8 +354,97 @@ def register_route_backend_models(app):
                 endpoint = connection.get("endpoint")
                 api_version = connection.get("project_api_version") or connection.get("api_version") or "v1"
                 project_name = connection.get("project_name")
-                log_models_debug(f"Foundry fetch project endpoint={endpoint or ''} api_version={api_version}")
-                deployments = fetch_foundry_project_deployments(endpoint, api_version, auth_settings, project_name=project_name)
+                discovery_endpoint = _resolve_foundry_discovery_endpoint(endpoint, project_name)
+                log_models_debug(
+                    f"Foundry fetch project endpoint={endpoint or ''}"
+                    f" discovery_endpoint={discovery_endpoint or ''}"
+                    f" api_version={api_version}"
+                )
+
+                if not _is_foundry_project_endpoint(discovery_endpoint):
+                    endpoint_value = str(discovery_endpoint or "").lower()
+                    if ".openai." in endpoint_value:
+                        subscription_id = management.get("subscription_id")
+                        resource_group = management.get("resource_group")
+                        if subscription_id and resource_group:
+                            log_models_debug(
+                                "Foundry provider selected with Azure OpenAI endpoint; "
+                                "falling back to AOAI ARM discovery."
+                            )
+                            account_name = endpoint.split('.')[0].replace("https://", "").replace("http://", "")
+                            client = build_cognitive_services_client(subscription_id, auth_settings)
+                            deployments = client.deployments.list(
+                                resource_group_name=resource_group,
+                                account_name=account_name
+                            )
+                            mapped = []
+                            for deployment in deployments:
+                                if not is_deployment_enabled(deployment):
+                                    continue
+                                model_name = deployment.properties.model.name
+                                if model_name and (
+                                    "gpt" in model_name.lower() or
+                                    re.search(r"o\d+", model_name.lower())
+                                ) and "image" not in model_name.lower():
+                                    mapped.append({
+                                        "deploymentName": deployment.name,
+                                        "modelName": model_name
+                                    })
+                            return jsonify({"models": mapped})
+                        raise ValueError(
+                            "Foundry project model discovery requires a Foundry project endpoint (services.ai.azure.*). "
+                            "For Azure OpenAI endpoints (openai.azure.*), use provider 'aoai' with subscription ID and resource group."
+                        )
+                    raise ValueError(
+                        "Foundry project model discovery requires a Foundry project endpoint (services.ai.azure.*)."
+                    )
+
+                if discovery_endpoint != endpoint:
+                    log_models_debug(
+                        "Foundry project discovery converted openai endpoint to services endpoint"
+                    )
+                try:
+                    deployments = fetch_foundry_project_deployments(
+                        discovery_endpoint,
+                        api_version,
+                        auth_settings,
+                        project_name=project_name,
+                    )
+                except requests.exceptions.ConnectionError as connection_error:
+                    if discovery_endpoint != endpoint:
+                        subscription_id = management.get("subscription_id")
+                        resource_group = management.get("resource_group")
+                        if subscription_id and resource_group:
+                            log_models_debug(
+                                "Foundry services endpoint resolution failed; "
+                                "falling back to AOAI ARM discovery."
+                            )
+                            account_name = endpoint.split('.')[0].replace("https://", "").replace("http://", "")
+                            client = build_cognitive_services_client(subscription_id, auth_settings)
+                            deployments = client.deployments.list(
+                                resource_group_name=resource_group,
+                                account_name=account_name
+                            )
+                            mapped = []
+                            for deployment in deployments:
+                                if not is_deployment_enabled(deployment):
+                                    continue
+                                model_name = deployment.properties.model.name
+                                if model_name and (
+                                    "gpt" in model_name.lower() or
+                                    re.search(r"o\d+", model_name.lower())
+                                ) and "image" not in model_name.lower():
+                                    mapped.append({
+                                        "deploymentName": deployment.name,
+                                        "modelName": model_name
+                                    })
+                            return jsonify({"models": mapped})
+
+                        raise ValueError(
+                            "Unable to resolve the inferred Foundry project host from the configured openai.azure.* endpoint. "
+                            "Set the actual Foundry project endpoint (services.ai.azure.*) for provider 'aifoundry', or switch to provider 'aoai' and provide subscription ID + resource group for ARM discovery."
+                        ) from connection_error
+                    raise
                 mapped = []
                 for item in deployments:
                     deployment_name = item.get("name") or item.get("deploymentName")
