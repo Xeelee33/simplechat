@@ -1,8 +1,138 @@
 <!-- BEGIN release_notes.md BLOCK -->
 
-This page tracks notable Simple Chat releases and organizes the detailed change log by version. The timeline below provides a quick visual overview of the current release progression through v0.240.002, and the per-version entries continue immediately after it.
+This page tracks notable Simple Chat releases and organizes the detailed change log by version. The timeline below provides a quick visual overview of the current release progression through v0.241.025, and the per-version entries continue immediately after it.
 
 For feature-focused and fix-focused drill-downs by version, see [Features by Version](/explanation/features/) and [Fixes by Version](/explanation/fixes/).
+
+### **(v0.241.025)**
+
+#### Bug Fixes
+
+*   **Azure Gov Backup Job Post-Setup Smoke Test Validation**
+    *   Added an automatic post-setup smoke test to the Azure Government backup job provisioning flow so setup now immediately starts one execution and waits for a terminal result.
+    *   Added artifact validation that checks for a freshly written `manifest.json` under the configured blob prefix, ensuring setup verifies both job success and backup output creation end-to-end.
+    *   Added an opt-out switch (`-SkipSmokeTest`) for scenarios where provisioning should complete without running validation execution.
+    *   (Ref: `scripts/setup_daily_ai_search_backup_job_azure_gov.ps1`, `application/single_app/config.py`)
+
+### **(v0.241.024)**
+
+#### Bug Fixes
+
+*   **Azure Gov Scheduled Backup Job Execution and RBAC Corrections**
+    *   Fixed recurring scheduled execution failures caused by shell command tokenization mismatch in Container Apps Job templates by adding post-provision command-array correction logic to enforce `command: ["/bin/sh", "-c"]` semantics.
+    *   Added `AZURE_CLIENT_ID` environment variable wiring (user-assigned managed identity client ID) so `DefaultAzureCredential` resolves the intended identity consistently in the backup container runtime.
+    *   Added `Search Service Contributor` role assignment for the backup job identity to support index-definition read operations (`get_index(...)`) required by the backup workflow, resolving search authorization failures observed after startup.
+    *   (Ref: `scripts/setup_daily_ai_search_backup_job_azure_gov.ps1`, `scripts/debug_containerapp_job_execution_logs.ps1`, `application/single_app/config.py`)
+
+### **(v0.241.022)**
+
+#### Bug Fixes
+
+*   **Azure Gov Backup Job Runtime and Diagnostics Stabilization**
+    *   Fixed repeated Azure Container Apps Job startup failures caused by command/argument formatting drift during job updates, and aligned provisioning to a shell-based execution pattern compatible with the observed CLI behavior in Azure Government.
+    *   Added/iterated a reusable execution log helper that reliably resolves workspace context and retrieves Container Apps console/system logs in Azure Government, including API-version/cloud endpoint compatibility handling and schema-correct KQL projections.
+    *   Used the new diagnostics path to validate the real runtime failure mode (`python: can't open file ...`) and drive corrective updates to backup-job provisioning logic.
+    *   (Ref: `scripts/setup_daily_ai_search_backup_job_azure_gov.ps1`, `scripts/debug_containerapp_job_execution_logs.ps1`, `scripts/Dockerfile`, `application/single_app/config.py`)
+
+### **(v0.241.011)**
+
+#### Bug Fixes
+
+*   **Azure Gov Backup Job Provisioning Hardening**
+    *   Fixed repeated Azure CLI extension setup failures by making `containerapp` extension install idempotent: the script now checks whether the extension is already installed before attempting add/upgrade.
+    *   Fixed Windows Azure CLI `UnicodeEncodeError` during ACR build log streaming by switching `az acr build` to `--no-logs`, preventing colorized stream output from failing on cp1252 consoles.
+    *   Fixed Azure Government Container Apps Job registry auth handling for `.azurecr.us` by resolving and using ACR admin credentials (`--registry-username` and `--registry-password`) where CLI validation rejected identity-only registry settings.
+    *   Added managed identity `AcrPull` role assignment and enabled stricter native command failure behavior so script execution stops on real `az` failures instead of reporting false success.
+    *   (Ref: `scripts/setup_daily_ai_search_backup_job_azure_gov.ps1`, `application/single_app/config.py`)
+
+### **(v0.241.010)**
+
+#### Bug Fixes
+
+*   **ACR Build Unicode Error and Job Existence Check Fix**
+    *   Fixed `UnicodeEncodeError: 'charmap' codec can't encode characters` crash during `az acr build` log streaming on Windows. Azure CLI's colorama output attempted to write non-cp1252 characters to the Windows console codec; resolved by setting `$env:PYTHONIOENCODING = "utf-8"` before any `az` calls.
+    *   Fixed `NativeCommandError` when checking for an existing Container Apps Job. With `$ErrorActionPreference = "Stop"`, a non-zero exit from `az containerapp job show` (job not yet created) became a terminating error even with `2>$null`; wrapped the call in `try {} catch {}` so a missing job falls through to the create branch as intended.
+    *   (Ref: `scripts/setup_daily_ai_search_backup_job_azure_gov.ps1`, `application/single_app/config.py`)
+
+### **(v0.241.009)**
+
+#### Bug Fixes
+
+*   **Azure AI Search Backup Job Dockerfile and ACR Build Fix**
+    *   Fixed `ERROR: Unable to find '.\Dockerfile'` failure when running `setup_daily_ai_search_backup_job_azure_gov.ps1` with `-BuildImage`. The script was calling `az acr build` without a `--file` flag, causing it to look for the main Flask app Dockerfile at the repo root instead of the backup-specific one.
+    *   Added `scripts/Dockerfile` — a minimal Python 3.12-slim image that installs `azure-identity`, `azure-search-documents`, and `azure-storage-blob`, then copies the `scripts/` directory for use as the Container Apps Job image.
+    *   Updated the `az acr build` call in the provisioning script to use `--file scripts/Dockerfile` so the correct image is built and the downstream Container Apps Job create step no longer fails with `ResourceNotFound`.
+    *   (Ref: `scripts/Dockerfile`, `scripts/setup_daily_ai_search_backup_job_azure_gov.ps1`, `application/single_app/config.py`)
+
+### **(v0.241.008)**
+
+#### New Features
+
+*   **Local Daily Azure AI Search Backup Scheduler**
+    *   Added a local PowerShell runner that executes the Azure AI Search backup script in direct-to-blob mode, enabling cron-like daily backups on Windows hosts running outside Azure scheduler services.
+    *   Added a local operations runbook with manual validation commands and a ready Windows Task Scheduler (`schtasks`) command template for daily execution.
+    *   Added a functional scaffold test to validate local scheduler script markers and required backup arguments for operational consistency.
+    *   (Ref: `scripts/run_daily_ai_search_backup_local.ps1`, `docs/explanation/features/LOCAL_DAILY_AI_SEARCH_BACKUP_SCHEDULER.md`, `functional_tests/test_local_daily_ai_search_backup_scheduler_scaffold.py`, `application/single_app/config.py`)
+
+### **(v0.241.007)**
+
+#### New Features
+
+*   **Daily Azure Government Backup Job Automation Script**
+    *   Added a reusable Azure Government provisioning script to create and maintain a scheduled Azure Container Apps Job that runs the Azure AI Search backup workflow once per day.
+    *   The script configures managed identity, role assignments, Container Apps environment/job setup, and uses direct-to-blob backup execution so backups write to Azure Storage without local persistence.
+    *   Operations: run on demand with `az containerapp job start -g <resource-group> -n job-search-backup-daily` and verify with `az containerapp job execution list -g <resource-group> -n job-search-backup-daily -o table`.
+    *   Added companion runbook documentation and a functional scaffold test to validate core script and README markers for operational consistency.
+    *   (Ref: `scripts/setup_daily_ai_search_backup_job_azure_gov.ps1`, `scripts/README_DAILY_AI_SEARCH_BACKUP_JOB_AZURE_GOV.md`, `docs/explanation/features/AZURE_DAILY_SEARCH_BACKUP_JOB_AUTOMATION.md`, `functional_tests/test_daily_ai_search_backup_job_script_scaffold.py`, `application/single_app/config.py`)
+
+*   **Azure AI Search Restore from Blob Container**
+    *   Added direct restore support from Azure Blob Storage backups generated by the backup script layout, so restore no longer requires local backup files when artifacts are already in blob.
+    *   Added restore CLI options `--blob-container-url`, `--blob-prefix`, `--backup-id`, and `--output-root` to resolve and stream `manifest.json`, `index-schema.json`, and `documents.jsonl` from blob paths.
+    *   Preserved existing local `--backup-path` behavior for backward compatibility and kept suffix/same target modes unchanged.
+    *   Added restore scaffold test coverage markers and updated backup strategy documentation with blob-based restore usage examples.
+    *   (Ref: `scripts/restore_ai_search_indexes.py`, `functional_tests/test_ai_search_restore_script_scaffold.py`, `docs/explanation/features/AZURE_AI_SEARCH_BACKUP_STRATEGY.md`, `application/single_app/config.py`)
+
+### **(v0.240.006)**
+
+#### New Features
+
+*   **Azure AI Search Backup Resume Checkpoints**
+    *   Added local checkpoint-based resume support for interrupted Azure AI Search backups using `--resume` and `--backup-id`.
+    *   Added per-index `backup-state.json` tracking for continuation token and exported document count so retries continue from the last saved page instead of restarting the full index export.
+    *   Added guardrails requiring `--backup-id` with `--resume` and documenting current local-first scope for resume behavior.
+    *   (Ref: `scripts/backup_ai_search_indexes.py`, `functional_tests/test_ai_search_backup_script_scaffold.py`, `docs/explanation/features/AZURE_AI_SEARCH_BACKUP_STRATEGY.md`, `application/single_app/config.py`)
+
+### **(v0.240.005)**
+
+#### New Features
+
+*   **Azure AI Search Backup Direct-to-Blob Mode**
+    *   Added a new `--write-direct-to-blob` mode to write `index-schema.json`, `documents.jsonl`, and `manifest.json` directly to Azure Blob Storage without persisting per-index backup files to local disk.
+    *   Added guardrails for direct mode (`--blob-container-url` required, not supported with `--dry-run`) and preserved existing local-first backup behavior as the default path.
+    *   (Ref: `scripts/backup_ai_search_indexes.py`, `functional_tests/test_ai_search_backup_script_scaffold.py`, `docs/explanation/features/AZURE_AI_SEARCH_BACKUP_STRATEGY.md`, `application/single_app/config.py`)
+
+*   **Azure AI Search Backup Blob Upload Enhancements**
+    *   Added blob upload command options for local-first backups (`--upload-to-blob`, `--blob-container-url`, `--blob-prefix`) with managed-identity authentication through `DefaultAzureCredential`.
+    *   Extended backup strategy documentation and scaffold validation coverage for blob upload and direct-to-blob modes.
+    *   (Ref: `scripts/backup_ai_search_indexes.py`, `functional_tests/test_ai_search_backup_script_scaffold.py`, `docs/explanation/features/AZURE_AI_SEARCH_BACKUP_STRATEGY.md`, `application/single_app/config.py`)
+
+### **(v0.240.003)**
+
+#### New Features
+
+*   **Azure AI Search Restore Scaffold**
+    *   Added a managed-identity restore scaffold script that recreates Azure AI Search indexes from backup artifacts (`manifest.json`, `index-schema.json`, `documents.jsonl`) for user, group, and public indexes.
+    *   Added restore planning controls including target index modes (`suffix` and `same`), overwrite confirmation requirements, retry handling, and batched document upload configuration.
+    *   Added dry-run restore mode that validates backup inputs and writes a restore manifest without requiring Azure SDK packages or live Azure connectivity.
+    *   Added a functional validation test for restore dry-run behavior, including target index suffix planning and restore manifest generation.
+    *   (Ref: `scripts/restore_ai_search_indexes.py`, `functional_tests/test_ai_search_restore_script_scaffold.py`, `docs/explanation/features/AZURE_AI_SEARCH_BACKUP_STRATEGY.md`, `application/single_app/config.py`)
+
+*   **Azure AI Search Backup Strategy Scaffold**
+    *   Added a managed-identity backup scaffold script that exports Azure AI Search index schema and documents for user, group, and public indexes into timestamped backup folders.
+    *   Added dry-run mode to validate backup folder structure and manifest generation without requiring Azure SDK packages or live Azure connectivity.
+    *   Added an implementation runbook documenting storage layout, job cadence, restore workflow, and initial RPO/RTO targets for operational resilience.
+    *   Added a functional validation test for dry-run backup scaffolding behavior.
+    *   (Ref: `scripts/backup_ai_search_indexes.py`, `docs/explanation/features/AZURE_AI_SEARCH_BACKUP_STRATEGY.md`, `functional_tests/test_ai_search_backup_script_scaffold.py`, `application/single_app/config.py`)
 
 ### **(v0.241.006)**
 
