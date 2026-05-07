@@ -115,6 +115,7 @@ SECURITY_HEADERS = {
         #"font-src 'self' https://cdn.jsdelivr.net https://stackpath.bootstrapcdn.com; "
         "connect-src 'self' https: wss: ws:; "
         "media-src 'self' blob:; "
+        "frame-src 'self' blob:; "
         "object-src 'none'; "
         "frame-ancestors 'self'; "
         "base-uri 'self';"

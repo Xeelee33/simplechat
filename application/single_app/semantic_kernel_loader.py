@@ -56,6 +56,7 @@ from functions_personal_agents import get_personal_agents, ensure_migration_comp
 from functions_agent_payload import can_agent_use_default_multi_endpoint_model
 from semantic_kernel_plugins.plugin_loader import discover_plugins
 from semantic_kernel_plugins.openapi_plugin_factory import OpenApiPluginFactory
+from config import cognitive_services_scope
 from functions_agent_scope import find_agent_by_scope, is_selected_agent_scope_enabled
 import app_settings_cache
 
@@ -287,6 +288,9 @@ def resolve_agent_config(agent, settings, group_scope_id=None):
             return custom_authority
         return AzureAuthorityHosts.AZURE_PUBLIC_CLOUD
 
+    def resolve_aoai_scope():
+        return str(cognitive_services_scope or "").strip()
+
     def resolve_foundry_scope(auth_settings, endpoint=None):
         custom_scope = (auth_settings.get("foundry_scope") or "").strip()
         if custom_scope:
@@ -326,9 +330,10 @@ def resolve_agent_config(agent, settings, group_scope_id=None):
                 authority=authority,
             )
 
-        scope = "https://cognitiveservices.azure.com/.default"
         if provider in ("aifoundry", "new_foundry"):
             scope = resolve_foundry_scope(auth_settings, endpoint=endpoint)
+        else:
+            scope = resolve_aoai_scope()
 
         return get_bearer_token_provider(credential, scope)
 
