@@ -24,7 +24,7 @@ The preference is stored as a per-user setting named `showTutorialButtons` insid
 
 ### Configuration and Data Flow
 
-- `functions_settings.get_user_settings()` now ensures `showTutorialButtons` exists and defaults to `True`.
+- `functions_settings.get_user_settings()` now ensures `showTutorialButtons` exists and defaults to `False`.
 - `route_backend_users.py` allows `showTutorialButtons` through the shared `/api/user/settings` update endpoint.
 - `profile.html` exposes a dedicated Tutorial Preferences card with a toggle and save action.
 - `chats.html` and `workspace.html` only render tutorial launchers when the current user setting is enabled.
