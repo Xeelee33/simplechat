@@ -350,7 +350,7 @@
                 <div>
                     <h5 class="mb-2"><i class="bi bi-sliders me-2"></i>Tutorial Preferences</h5>
                     <p class="text-muted mb-2">Control whether the floating guided tutorial buttons appear on Chat and Personal Workspace for your account.</p>
-                    <p class="small text-muted mb-0">These launchers are shown by default. You can hide them now and turn them back on later from this page.</p>
+                    <p class="small text-muted mb-0">These launchers are hidden by default. You can turn them on here at any time.</p>
                 </div>
             </div>
             {% if app_settings.enable_support_menu and app_settings.enable_support_latest_features and app_settings.support_latest_features_has_visible_items %}
@@ -367,12 +367,12 @@
                         class="form-check-input"
                         type="checkbox"
                         id="show-tutorial-buttons-toggle"
-                        {% if user_settings.get('settings', {}).get('showTutorialButtons', True) %}checked{% endif %}
+                        {% if user_settings.get('settings', {}).get('showTutorialButtons', False) %}checked{% endif %}
                     />
                     <label class="form-check-label fw-semibold" for="show-tutorial-buttons-toggle">
                         Show tutorial buttons on Chat and Personal Workspace
                     </label>
-                    <small class="d-block text-muted mt-1">Turn this off if you already know the interface and want to remove the floating walkthrough launchers.</small>
+                    <small class="d-block text-muted mt-1">Turn this on if you want floating walkthrough launchers on Chat and Personal Workspace.</small>
                 </div>
             </div>
             <div class="col-lg-4 text-lg-end">
@@ -1532,8 +1532,8 @@ function loadTutorialPreferences() {
     fetch('/api/user/settings')
         .then(response => response.json())
         .then(data => {
-            toggle.checked = data.settings?.showTutorialButtons !== false;
-            updateTutorialPreferenceStatus('Tutorial launchers are shown by default until you change this setting.');
+            toggle.checked = data.settings?.showTutorialButtons === true;
+            updateTutorialPreferenceStatus('Tutorial launchers are hidden by default until you enable this setting.');
         })
         .catch(error => {
             console.error('Error loading tutorial preferences:', error);

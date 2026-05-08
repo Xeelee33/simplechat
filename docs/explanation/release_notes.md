@@ -1,8 +1,18 @@
 <!-- BEGIN release_notes.md BLOCK -->
 
-This page tracks notable Simple Chat releases and organizes the detailed change log by version. The timeline below provides a quick visual overview of the current release progression through v0.240.002, and the per-version entries continue immediately after it.
+This page tracks notable Simple Chat releases and organizes the detailed change log by version. The timeline below provides a quick visual overview of the current release progression through v0.241.007, and the per-version entries continue immediately after it.
 
 For feature-focused and fix-focused drill-downs by version, see [Features by Version](/explanation/features/) and [Fixes by Version](/explanation/fixes/).
+
+### **(v0.241.007)**
+
+#### Bug Fixes
+
+*   **Tutorial Visibility Default Preference Persistence**
+    *   Fixed the Profile tutorial preference loader so a missing `showTutorialButtons` value now resolves to hidden (`false`) instead of being interpreted as enabled.
+    *   This prevents the UI from unintentionally treating an unset Cosmos setting as `true` and writing the toggle back as enabled during later saves.
+    *   Updated profile helper text to match the hidden-by-default behavior and refreshed functional coverage markers for the revised default logic.
+    *   (Ref: `profile.html`, `test_user_tutorial_visibility_preference.py`, `application/single_app/config.py`)
 
 ### **(v0.241.006)**
 

@@ -2,10 +2,10 @@
 # test_user_tutorial_visibility_preference.py
 """
 Functional test for user tutorial visibility preference.
-Version: 0.241.003
-Implemented in: 0.240.068; 0.241.002; 0.241.003
+Version: 0.241.007
+Implemented in: 0.240.068; 0.241.002; 0.241.003; 0.241.007
 
-This test ensures that guided tutorial launchers remain visible by default,
+This test ensures that guided tutorial launchers are hidden by default,
 users can manage the preference from the profile page, and the Latest Features
 experience points users back to profile settings when they want to hide or
 restore tutorial buttons.
@@ -45,13 +45,13 @@ def test_user_tutorial_visibility_preference() -> bool:
     latest_features_content = read_text(LATEST_FEATURES_TEMPLATE_FILE)
 
     required_config_markers = [
-        'VERSION = "0.241.003"',
+        'VERSION = "0.241.007"',
     ]
     missing_config = [marker for marker in required_config_markers if marker not in config_content]
     assert not missing_config, f"Missing config markers: {missing_config}"
 
     required_settings_markers = [
-        "doc['settings']['showTutorialButtons'] = True",
+        "doc['settings']['showTutorialButtons'] = False",
         'if \'showTutorialButtons\' not in doc[\'settings\']:',
     ]
     missing_settings = [marker for marker in required_settings_markers if marker not in settings_content]
@@ -70,14 +70,15 @@ def test_user_tutorial_visibility_preference() -> bool:
         'onclick="saveTutorialPreferences()"',
         "function loadTutorialPreferences()",
         "function saveTutorialPreferences()",
+        "toggle.checked = data.settings?.showTutorialButtons === true;",
         "showTutorialButtons: toggle.checked",
-        "These launchers are shown by default.",
+        "These launchers are hidden by default.",
     ]
     missing_profile = [marker for marker in required_profile_markers if marker not in profile_content]
     assert not missing_profile, f"Missing profile preference markers: {missing_profile}"
 
     required_template_guards = [
-        "{% if user_settings.get('settings', {}).get('showTutorialButtons', True) %}",
+        "{% if user_settings.get('settings', {}).get('showTutorialButtons', False) %}",
         'id="chat-tutorial-launch"',
         'id="workspace-tutorial-launch"',
     ]
