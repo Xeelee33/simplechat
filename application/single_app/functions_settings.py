@@ -900,6 +900,21 @@ def apply_custom_endpoint_setting_migration(settings_item):
 
     return updated
 
+
+def _get_default_management_cloud_from_environment():
+    """Map AZURE_ENVIRONMENT to the default model endpoint management cloud value."""
+    environment = str(AZURE_ENVIRONMENT or "").strip().lower()
+    if environment in ("usgovernment", "government"):
+        return "government"
+    return "public"
+
+
+def _is_management_cloud_user_editable(endpoint_provider, endpoint_auth_type):
+    """Return True only when the admin UI exposes management cloud selection."""
+    provider = str(endpoint_provider or "").strip().lower()
+    auth_type = str(endpoint_auth_type or "").strip().lower()
+    return provider in ("aifoundry", "new_foundry") and auth_type == "service_principal"
+
 def normalize_model_endpoints(endpoints):
     """Normalize model endpoints with stable IDs and enabled flags."""
     if not isinstance(endpoints, list):
@@ -907,6 +922,7 @@ def normalize_model_endpoints(endpoints):
 
     normalized = []
     changed = False
+    default_management_cloud = _get_default_management_cloud_from_environment()
 
     for endpoint in endpoints:
         if not isinstance(endpoint, dict):
@@ -924,6 +940,23 @@ def normalize_model_endpoints(endpoints):
 
         if endpoint_copy.get("enabled") is None:
             endpoint_copy["enabled"] = True
+            changed = True
+
+        auth = endpoint_copy.get("auth")
+        if not isinstance(auth, dict):
+            auth = {}
+            endpoint_copy["auth"] = auth
+            changed = True
+
+        auth_type = str(auth.get("type") or "").strip().lower()
+        provider = str(endpoint_copy.get("provider") or "").strip().lower()
+        management_cloud = str(auth.get("management_cloud") or "").strip().lower()
+        cloud_user_editable = _is_management_cloud_user_editable(provider, auth_type)
+
+        # When cloud selection is not user-editable in the admin UI, do not trust
+        # posted defaults and always align cloud behavior with AZURE_ENVIRONMENT.
+        if (not cloud_user_editable and management_cloud != default_management_cloud) or not management_cloud:
+            auth["management_cloud"] = default_management_cloud
             changed = True
 
         models = endpoint_copy.get("models") or []

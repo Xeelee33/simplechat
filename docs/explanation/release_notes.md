@@ -4,12 +4,27 @@ This page tracks notable Simple Chat releases and organizes the detailed change 
 
 For feature-focused and fix-focused drill-downs by version, see [Features by Version](/explanation/features/) and [Fixes by Version](/explanation/fixes/).
 
+### **(v0.241.008)**
+
+#### Bug Fixes
+
+*   **Model Endpoint Cloud Enforcement for Hidden Admin Fields**
+    *   Fixed a follow-up issue where model endpoint saves could still persist `auth.management_cloud` as `public` when the cloud selector was not exposed in the Admin Model Endpoints UI.
+    *   Model endpoint normalization now enforces `management_cloud` from `AZURE_ENVIRONMENT` whenever cloud selection is not user-editable, preventing hidden UI defaults from causing Government token audience and scope mismatches.
+    *   Added focused functional regression coverage for the new normalization guard.
+    *   (Ref: `functions_settings.py`, `test_model_endpoint_management_cloud_default.py`, model endpoint normalization, `AZURE_ENVIRONMENT`)
+
 ### **(v0.241.007)**
 
 ## New Feature
 * **Improved Mobile UI Support**
 
 ## Bug Fixes
+
+*   **Model Endpoint Management Cloud Default Alignment**
+    *   Fixed model endpoint save behavior so new endpoint records no longer default `management_cloud` to `public` when cloud selection is not explicitly provided.
+    *   Endpoint normalization now derives the default cloud from `AZURE_ENVIRONMENT`, mapping `usgovernment`/`government` to `government` and all other environments to `public`, which prevents Gov audience and token-scope mismatches during model calls.
+    *   (Ref: `functions_settings.py`, model endpoint normalization, `AZURE_ENVIRONMENT`)
 
 *   **Uploaded File Preview Body XSS Hardening**
     *   Fixed the uploaded-file preview modal so stored file bodies no longer reach the preview pane through raw HTML sinks.
