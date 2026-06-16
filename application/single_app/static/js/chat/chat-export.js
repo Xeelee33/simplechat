@@ -17,6 +17,9 @@ let exportFormat = 'json';
 let exportPackaging = 'single';
 let includeSummaryIntro = false;
 let summaryModelDeployment = '';
+let summaryModelId = '';
+let summaryModelEndpointId = '';
+let summaryModelProvider = '';
 let currentStep = 1;
 let totalSteps = 3;
 let skipSelectionStep = false;
@@ -57,6 +60,10 @@ function openExportWizard(conversationIds, skipSelection) {
     exportPackaging = conversationIds.length > 1 ? 'zip' : 'single';
     includeSummaryIntro = false;
     summaryModelDeployment = _getDefaultSummaryModel();
+    const defaultModelMeta = _getDefaultSummaryModelMetadata();
+    summaryModelId = defaultModelMeta.modelId;
+    summaryModelEndpointId = defaultModelMeta.endpointId;
+    summaryModelProvider = defaultModelMeta.provider;
     skipSelectionStep = !!skipSelection;
 
     // Determine step configuration
@@ -345,9 +352,17 @@ function _renderSummaryStep(container) {
 
     if (summaryModelSelect && hasModelOptions) {
         summaryModelSelect.value = defaultSummaryModel || summaryModelSelect.value;
-        summaryModelDeployment = summaryModelSelect.options[summaryModelSelect.selectedIndex]?.dataset?.deploymentName || summaryModelSelect.value;
+        const selected = summaryModelSelect.options[summaryModelSelect.selectedIndex];
+        summaryModelDeployment = selected?.dataset?.deploymentName || summaryModelSelect.value;
+        summaryModelId = selected?.dataset?.modelId || '';
+        summaryModelEndpointId = selected?.dataset?.endpointId || '';
+        summaryModelProvider = selected?.dataset?.provider || '';
         summaryModelSelect.addEventListener('change', () => {
-            summaryModelDeployment = summaryModelSelect.options[summaryModelSelect.selectedIndex]?.dataset?.deploymentName || summaryModelSelect.value;
+            const opt = summaryModelSelect.options[summaryModelSelect.selectedIndex];
+            summaryModelDeployment = opt?.dataset?.deploymentName || summaryModelSelect.value;
+            summaryModelId = opt?.dataset?.modelId || '';
+            summaryModelEndpointId = opt?.dataset?.endpointId || '';
+            summaryModelProvider = opt?.dataset?.provider || '';
         });
     }
 
@@ -359,7 +374,11 @@ function _renderSummaryStep(container) {
             }
             if (includeSummaryIntro && summaryModelSelect && !summaryModelSelect.value) {
                 summaryModelSelect.value = _getDefaultSummaryModel();
-                summaryModelDeployment = summaryModelSelect.options[summaryModelSelect.selectedIndex]?.dataset?.deploymentName || summaryModelSelect.value;
+                const opt = summaryModelSelect.options[summaryModelSelect.selectedIndex];
+                summaryModelDeployment = opt?.dataset?.deploymentName || summaryModelSelect.value;
+                summaryModelId = opt?.dataset?.modelId || '';
+                summaryModelEndpointId = opt?.dataset?.endpointId || '';
+                summaryModelProvider = opt?.dataset?.provider || '';
             }
         });
     }
@@ -532,7 +551,10 @@ async function _executeExport() {
                 format: exportFormat,
                 packaging: exportPackaging,
                 include_summary_intro: includeSummaryIntro,
-                summary_model_deployment: includeSummaryIntro ? summaryModelDeployment : null
+                summary_model_deployment: includeSummaryIntro ? summaryModelDeployment : null,
+                summary_model_id: includeSummaryIntro ? summaryModelId : null,
+                summary_model_endpoint_id: includeSummaryIntro ? summaryModelEndpointId : null,
+                summary_model_provider: includeSummaryIntro ? summaryModelProvider : null
             })
         });
 
@@ -603,6 +625,20 @@ function _getDefaultSummaryModel() {
     }
 
     return mainModelSelect.value || (mainModelSelect.options[0] ? mainModelSelect.options[0].value : '');
+}
+
+function _getDefaultSummaryModelMetadata() {
+    const mainModelSelect = getEl('model-select');
+    if (!mainModelSelect || !mainModelSelect.options.length) {
+        return { modelId: '', endpointId: '', provider: '' };
+    }
+
+    const selected = mainModelSelect.options[mainModelSelect.selectedIndex] || mainModelSelect.options[0];
+    return {
+        modelId: selected.dataset?.modelId || '',
+        endpointId: selected.dataset?.endpointId || '',
+        provider: selected.dataset?.provider || ''
+    };
 }
 
 // --- Expose Globally ---
