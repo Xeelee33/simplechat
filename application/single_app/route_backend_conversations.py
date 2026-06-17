@@ -1053,7 +1053,12 @@ def register_route_backend_conversations(app):
                 model_endpoint_id=model_endpoint_id,
                 model_provider=model_provider,
                 user_id=user_id,
-                active_group_ids=[active_group_id] if active_group_id else active_group_ids,
+                # For now, summaries use the same group context that
+                # was already captured in conversation metadata. The
+                # generate_conversation_summary helper accepts
+                # active_group_ids but does not require it, so we pass
+                # None here to avoid referencing undefined variables.
+                active_group_ids=None,
             )
             return jsonify({'success': True, 'summary': summary_data}), 200
 
