@@ -673,27 +673,35 @@ function getAvailableModelOptions() {
   if (!globalSelect) {
     return '<option value="">Default</option>';
   }
-  let options = '';
+
+  const tempSelect = document.createElement('select');
+
   for (const opt of globalSelect.options) {
-    const value = escapeHtml(opt.value);
-    const text = escapeHtml(opt.text);
-    const deploymentName = opt.dataset?.deploymentName || '';
-    const modelId = opt.dataset?.modelId || '';
-    const endpointId = opt.dataset?.endpointId || '';
-    const provider = opt.dataset?.provider || '';
+    const cloned = document.createElement('option');
+    cloned.value = opt.value;
+    cloned.textContent = opt.text;
 
-    const attrs = [
-      `value="${value}"`,
-      deploymentName ? `data-deployment-name="${escapeHtml(deploymentName)}"` : '',
-      modelId ? `data-model-id="${escapeHtml(modelId)}"` : '',
-      endpointId ? `data-endpoint-id="${escapeHtml(endpointId)}"` : '',
-      provider ? `data-provider="${escapeHtml(provider)}"` : '',
-      opt.selected ? 'selected' : ''
-    ].filter(Boolean).join(' ');
+    if (opt.dataset?.deploymentName) {
+      cloned.dataset.deploymentName = opt.dataset.deploymentName;
+    }
+    if (opt.dataset?.modelId) {
+      cloned.dataset.modelId = opt.dataset.modelId;
+    }
+    if (opt.dataset?.endpointId) {
+      cloned.dataset.endpointId = opt.dataset.endpointId;
+    }
+    if (opt.dataset?.provider) {
+      cloned.dataset.provider = opt.dataset.provider;
+    }
+    if (opt.selected) {
+      cloned.selected = true;
+    }
 
-    options += `<option ${attrs}>${text}</option>`;
+    tempSelect.appendChild(cloned);
   }
-  return options || '<option value="">Default</option>';
+
+  const html = tempSelect.innerHTML;
+  return html || '<option value="">Default</option>';
 }
 
 /**
