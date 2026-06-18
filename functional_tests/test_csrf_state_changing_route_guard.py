@@ -1,11 +1,13 @@
 # test_csrf_state_changing_route_guard.py
 """
 Functional test for CSRF state-changing route guard.
-Version: 0.242.053
+Version: 0.242.072
 Implemented in: 0.242.053
+Updated in: 0.242.072
 
 This test ensures authenticated unsafe-method Flask requests have a same-origin
-browser boundary and explicit session-cookie defaults.
+browser boundary, the Teams token exchange has a pre-session same-origin
+boundary, and session-cookie defaults are explicit.
 """
 
 import ast
@@ -34,6 +36,8 @@ def test_csrf_guard_structure():
 
     required_functions = {
         "_normalize_origin_from_url",
+        "_origin_matches_allowed_origin",
+        "_origin_matches_any_allowed_origin",
         "_build_allowed_request_origins",
         "_state_changing_request_has_same_origin_boundary",
         "enforce_same_origin_for_state_changing_requests",
@@ -56,7 +60,8 @@ def test_csrf_guard_structure():
         "X-Forwarded-Proto",
         "CSRF_TRUSTED_ORIGINS",
         "front_door_url",
-        "if 'user' not in session:",
+        "request.path == '/auth/teams/token-exchange' and ENABLE_TEAMS_SSO",
+        "if 'user' not in session and not is_teams_token_exchange:",
         "return jsonify({",
         "}), 403",
     ]
@@ -75,7 +80,7 @@ def test_session_cookie_defaults_are_explicit():
     app_source = _read_text(APP_FILE)
 
     config_required = [
-        "VERSION = \"0.242.053\"",
+        "VERSION = \"0.242.072\"",
         "SESSION_COOKIE_SAMESITE = os.getenv('SESSION_COOKIE_SAMESITE', 'Lax')",
         "SESSION_COOKIE_HTTPONLY = os.getenv('SESSION_COOKIE_HTTPONLY', 'true').lower() != 'false'",
         "SESSION_COOKIE_SECURE = os.getenv('SESSION_COOKIE_SECURE', 'false').lower() == 'true'",

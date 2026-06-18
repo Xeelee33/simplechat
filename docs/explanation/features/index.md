@@ -34,6 +34,7 @@ category: Version History
 
 ## Versioned Features
 
+- [Microsoft Teams App SSO](v0.242.072/TEAMS_APP_SSO.md)
 - [Tabular SK Large Result Pagination](v0.242.067/TABULAR_SK_LARGE_RESULT_PAGINATION.md)
 - [Model Endpoint Model Icon Picker](v0.242.060/MODEL_ENDPOINT_MODEL_ICON_PICKER.md)
 - [Deployer Capacity Defaults](v0.241.085/DEPLOYER_CAPACITY_DEFAULTS.md)

@@ -653,6 +653,40 @@ def _add_allowed_origin(allowed_origins, raw_origin):
         allowed_origins.add(normalized_origin)
 
 
+def _origin_matches_allowed_origin(request_origin, allowed_origin):
+    """Return True when an origin matches an exact or wildcard allowed origin."""
+    if not request_origin or not allowed_origin:
+        return False
+    if request_origin == allowed_origin:
+        return True
+
+    try:
+        request_parsed = urlparse(request_origin)
+        allowed_parsed = urlparse(allowed_origin)
+    except ValueError:
+        return False
+
+    if request_parsed.scheme != allowed_parsed.scheme:
+        return False
+    if request_parsed.port != allowed_parsed.port:
+        return False
+
+    allowed_host = (allowed_parsed.hostname or '').lower()
+    request_host = (request_parsed.hostname or '').lower()
+    if not allowed_host.startswith('*.'):
+        return False
+
+    allowed_suffix = allowed_host[1:]
+    return request_host.endswith(allowed_suffix) and request_host != allowed_host[2:]
+
+
+def _origin_matches_any_allowed_origin(request_origin, allowed_origins):
+    return any(
+        _origin_matches_allowed_origin(request_origin, allowed_origin)
+        for allowed_origin in allowed_origins
+    )
+
+
 def _build_allowed_request_origins():
     allowed_origins = set()
     _add_allowed_origin(allowed_origins, request.host_url)
@@ -703,13 +737,13 @@ def _state_changing_request_has_same_origin_boundary():
     allowed_origins = _build_allowed_request_origins()
     if origin_header:
         request_origin = _normalize_origin_from_url(origin_header)
-        if request_origin and request_origin in allowed_origins:
+        if request_origin and _origin_matches_any_allowed_origin(request_origin, allowed_origins):
             return True, 'origin matched'
         return False, 'origin mismatch'
 
     if referer_header:
         request_origin = _normalize_origin_from_url(referer_header)
-        if request_origin and request_origin in allowed_origins:
+        if request_origin and _origin_matches_any_allowed_origin(request_origin, allowed_origins):
             return True, 'referer matched'
         return False, 'referer mismatch'
 
@@ -731,7 +765,8 @@ def enforce_same_origin_for_state_changing_requests():
         return None
     if not _requires_same_origin_state_change_boundary():
         return None
-    if 'user' not in session:
+    is_teams_token_exchange = request.path == '/auth/teams/token-exchange' and ENABLE_TEAMS_SSO
+    if 'user' not in session and not is_teams_token_exchange:
         return None
 
     has_boundary, reason = _state_changing_request_has_same_origin_boundary()
