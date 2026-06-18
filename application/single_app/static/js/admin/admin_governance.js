@@ -16,12 +16,54 @@ const GOVERNANCE_ITEM_ENTITY_LABELS = {
     global_endpoint: 'Global Endpoint',
     global_agent: 'Global Agent',
     global_action: 'Global Action',
+    personal_action_type: 'Personal Action Type',
+    group_action_type: 'Group Action Type',
+    global_action_type: 'Global Action Type',
 };
 
 const GOVERNANCE_ITEM_LOOKUP_HINTS = {
     global_endpoint: 'Select an endpoint configured in Admin Settings.',
     global_agent: 'Select a global agent available for delegation.',
     global_action: 'Select a global action available for delegation.',
+    personal_action_type: 'Select an action type users can create and use in personal workspaces.',
+    group_action_type: 'Select an action type groups can create and use in group workspaces.',
+    global_action_type: 'Select an action type users can use from configured global actions.',
+};
+
+const GOVERNANCE_ACTION_TYPE_ALIASES = {
+    sql_query: 'sql',
+    sql_schema: 'sql',
+    sql: 'sql',
+    simple_chat: 'simplechat',
+    simplechat: 'simplechat',
+    open_api: 'openapi',
+    openapi: 'openapi',
+    model_context_protocol: 'mcp',
+    mcp: 'mcp',
+    microsoft_graph: 'msgraph',
+    msgraph: 'msgraph',
+    databricks_table: 'databricks',
+    databricks: 'databricks',
+    tableau: 'tableau',
+    chart: 'chart',
+    azure_maps: 'azure_maps',
+    blob_storage: 'blob_storage',
+    document_search: 'document_search',
+    search: 'document_search',
+};
+
+const GOVERNANCE_ACTION_TYPE_LABELS = {
+    sql: 'SQL',
+    simplechat: 'SimpleChat',
+    openapi: 'OpenAPI',
+    mcp: 'MCP',
+    msgraph: 'Microsoft Graph',
+    databricks: 'Databricks',
+    tableau: 'Tableau',
+    chart: 'Chart',
+    azure_maps: 'Azure Maps',
+    blob_storage: 'Blob Storage',
+    document_search: 'Document Search',
 };
 
 const GOVERNANCE_PRIMARY_TOGGLE_MAP = {
@@ -58,6 +100,9 @@ const governanceItemLookupState = {
     global_endpoint: [],
     global_agent: [],
     global_action: [],
+    personal_action_type: [],
+    group_action_type: [],
+    global_action_type: [],
 };
 
 const governanceAllowListSelectionViewState = {
@@ -147,11 +192,14 @@ function uniquePrincipalList(values) {
     return Array.from(new Set((Array.isArray(values) ? values : []).map((value) => String(value || '').trim()).filter((value) => value)));
 }
 
-function buildAllowListSummary(users, groups) {
+function buildAllowListSummary(users, groups, allowAll = false) {
     const usersCount = Array.isArray(users) ? users.length : 0;
     const groupsCount = Array.isArray(groups) ? groups.length : 0;
+    if (allowAll) {
+        return 'All users and groups allowed';
+    }
     if (usersCount === 0 && groupsCount === 0) {
-        return 'No explicit users or groups configured';
+        return 'No users or groups allowed';
     }
     return `${usersCount} user${usersCount === 1 ? '' : 's'}, ${groupsCount} group${groupsCount === 1 ? '' : 's'}`;
 }
@@ -317,6 +365,48 @@ async function fetchAdminGlobalActionLookupOptions() {
         .filter((option) => option !== null);
 }
 
+function normalizeGovernanceActionType(actionType) {
+    const normalizedType = String(actionType || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+    return GOVERNANCE_ACTION_TYPE_ALIASES[normalizedType] || normalizedType;
+}
+
+function buildGovernanceActionTypeLabel(actionType, fallbackLabel = '') {
+    const normalizedType = normalizeGovernanceActionType(actionType);
+    if (!normalizedType) {
+        return fallbackLabel || 'Unknown Action Type';
+    }
+    return GOVERNANCE_ACTION_TYPE_LABELS[normalizedType] || fallbackLabel || normalizedType.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+async function fetchAdminActionTypeLookupOptions() {
+    const response = await fetch('/api/admin/plugins/types', {
+        method: 'GET',
+        headers: {
+            Accept: 'application/json',
+        },
+    });
+
+    if (!response.ok) {
+        throw new Error('Unable to load action type lookup.');
+    }
+
+    const payload = await response.json();
+    const optionsByType = new Map();
+    (Array.isArray(payload) ? payload : []).forEach((actionType) => {
+        const rawType = actionType?.type;
+        const normalizedType = normalizeGovernanceActionType(rawType);
+        if (!normalizedType || optionsByType.has(normalizedType)) {
+            return;
+        }
+        optionsByType.set(normalizedType, normalizeGovernanceLookupOption({
+            value: normalizedType,
+            label: buildGovernanceActionTypeLabel(normalizedType, actionType?.display || rawType),
+            subtitle: actionType?.description || rawType || '',
+        }, 'Action Type'));
+    });
+    return Array.from(optionsByType.values()).filter((option) => option !== null);
+}
+
 async function loadGovernanceItemLookup(entityType, forceReload = false) {
     const normalizedEntityType = normalizeGovernanceItemEntityType(entityType);
     if (!normalizedEntityType) {
@@ -338,6 +428,10 @@ async function loadGovernanceItemLookup(entityType, forceReload = false) {
     if (normalizedEntityType === 'global_action') {
         governanceItemLookupState.global_action = await fetchAdminGlobalActionLookupOptions();
         return governanceItemLookupState.global_action;
+    }
+    if (['personal_action_type', 'group_action_type', 'global_action_type'].includes(normalizedEntityType)) {
+        governanceItemLookupState[normalizedEntityType] = await fetchAdminActionTypeLookupOptions();
+        return governanceItemLookupState[normalizedEntityType];
     }
 
     return [];
@@ -414,7 +508,7 @@ function updateFeatureAllowListSummary(row) {
 
     const users = splitPrincipalList(usersInput.value);
     const groups = splitPrincipalList(groupsInput.value);
-    summaryEl.textContent = buildAllowListSummary(users, groups);
+    summaryEl.textContent = buildAllowListSummary(users, groups, getGovernanceFeatureAllowAllInput(row)?.checked);
 }
 
 function updateItemAllowListSummary() {
@@ -425,7 +519,11 @@ function updateItemAllowListSummary() {
         return;
     }
 
-    summaryInput.value = buildAllowListSummary(splitPrincipalList(usersInput.value), splitPrincipalList(groupsInput.value));
+    summaryInput.value = buildAllowListSummary(
+        splitPrincipalList(usersInput.value),
+        splitPrincipalList(groupsInput.value),
+        getItemAllowAllInput()?.checked,
+    );
 }
 
 function applyFeatureAllowAllUiState(row) {
@@ -629,7 +727,19 @@ function syncGovernanceFeatureToggleVisibility() {
         if (!wrapper) {
             return;
         }
-        wrapper.classList.toggle('d-none', !isGovernanceFeatureApplicable(featureKey));
+
+        const isApplicable = isGovernanceFeatureApplicable(featureKey);
+        const isLocked = featureToggle.dataset.governanceLocked === 'true';
+        wrapper.classList.remove('d-none');
+        wrapper.classList.toggle('text-body-secondary', !isApplicable);
+        if (!isLocked) {
+            featureToggle.disabled = !isApplicable;
+        }
+        if (isApplicable) {
+            wrapper.removeAttribute('title');
+        } else {
+            wrapper.title = 'Enable the matching primary feature before governance can be enforced for this scope.';
+        }
     });
 }
 
@@ -674,7 +784,7 @@ function buildFeaturePolicyRow(policy) {
 
     const usersSummary = document.createElement('div');
     usersSummary.className = 'small text-body-secondary governance-allowlist-summary';
-    usersSummary.textContent = buildAllowListSummary(policy.allowed_users, policy.allowed_groups);
+    usersSummary.textContent = buildAllowListSummary(policy.allowed_users, policy.allowed_groups, allowAll.checked);
     usersCell.appendChild(usersSummary);
 
     const usersEditButton = document.createElement('button');
@@ -1229,13 +1339,13 @@ function ensureGovernanceItemPolicyEditorModal() {
                         <div class="modal-header">
                             <div>
                                 <h5 class="modal-title mb-1" id="governance-item-policy-editor-title">Edit Delegated Item Policy</h5>
-                                <div class="small text-muted">Choose the delegated item, then search or bulk-load allowed users and groups.</div>
+                                <div class="small text-muted">Choose the delegated item or action type, then search or bulk-load allowed users and groups.</div>
                             </div>
                             <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                         </div>
                         <div class="modal-body">
                             <div class="alert alert-info py-2 small" role="alert">
-                                Delegated item policies are OR combined whitelists. Membership in any policy for this item grants access after the matching feature policy passes.
+                                Delegated item policies are OR combined whitelists. Action type policies grant create/use entitlement for a type; global action policies grant access to one configured global action.
                             </div>
                             <div class="row g-3 mb-3">
                                 <div class="col-lg-8">
@@ -1254,6 +1364,9 @@ function ensureGovernanceItemPolicyEditorModal() {
                                         <option value="global_agent" selected>Global Agent</option>
                                         <option value="global_action">Global Action</option>
                                         <option value="global_endpoint">Global Endpoint</option>
+                                        <option value="personal_action_type">Personal Action Type</option>
+                                        <option value="group_action_type">Group Action Type</option>
+                                        <option value="global_action_type">Global Action Type</option>
                                     </select>
                                 </div>
                                 <div class="col-lg-6 col-md-8">
@@ -1282,7 +1395,7 @@ function ensureGovernanceItemPolicyEditorModal() {
 
                             <div class="mt-3">
                                 <label class="form-label" for="governance-item-allowlist-summary">Allowed Principals</label>
-                                <input type="text" class="form-control" id="governance-item-allowlist-summary" placeholder="No explicit users or groups configured" readonly>
+                                <input type="text" class="form-control" id="governance-item-allowlist-summary" placeholder="No users or groups allowed" readonly>
                             </div>
 
                             <div class="mt-3 pt-3 border-top d-none" id="governance-item-allowed-principals-controls">
@@ -3283,6 +3396,11 @@ function wireGovernanceHandlers() {
             window.setTimeout(() => {
                 const target = document.getElementById(targetId);
                 const wrapper = target?.closest('.form-check');
+                if (target instanceof HTMLInputElement && target.disabled && target.dataset.governanceLocked !== 'true') {
+                    wrapper?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    setGovernanceStatus('Enable the matching primary feature before configuring governance for it.', 'warning');
+                    return;
+                }
                 if (wrapper?.classList.contains('d-none')) {
                     setGovernanceStatus('Enable the matching primary feature before configuring governance for it.', 'warning');
                     return;

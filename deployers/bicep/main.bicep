@@ -73,6 +73,45 @@ param authenticationType string
 ''')
 param configureApplicationPermissions bool
 
+@description('''Azure Cosmos DB capacity mode.
+- provisioned: Default. Uses dedicated container autoscale throughput for application containers.
+- serverless: Optional for short-lived MVP or evaluation environments with very low traffic.''')
+@allowed([
+  'provisioned'
+  'serverless'
+])
+param cosmosCapacityMode string = 'provisioned'
+
+@description('''Maximum RU/s for each SimpleChat Cosmos DB container when cosmosCapacityMode is provisioned.
+- Default is 1000 RU/s autoscale max per container.
+- Parameter name is retained for deployment compatibility with earlier templates.
+- Ignored when cosmosCapacityMode is serverless.''')
+@minValue(1000)
+param cosmosDatabaseAutoscaleMaxThroughput int = 1000
+
+@description('''Azure AI Search service SKU.
+- standard is Azure AI Search S1 and is the default for document search.
+- free may be used only for short-lived MVP or evaluation phases with known service limits.''')
+@allowed([
+  'free'
+  'basic'
+  'standard'
+  'standard2'
+  'standard3'
+  'storage_optimized_l1'
+  'storage_optimized_l2'
+])
+param searchSkuName string = 'standard'
+
+@description('''Azure AI Search semantic ranker SKU.
+- standard is the default so workspace search does not depend on the limited free semantic quota.
+- free may be used only for short-lived MVP or evaluation phases.''')
+@allowed([
+  'free'
+  'standard'
+])
+param searchSemanticSearchSku string = 'standard'
+
 @description('Optional object containing additional tags to apply to all resources.')
 param specialTags object = {}
 
@@ -378,6 +417,8 @@ module cosmosDB 'modules/cosmosDb.bicep' = {
 
     enablePrivateNetworking: enablePrivateNetworking
     allowedIpAddresses: cosmosDbIpRules
+    capacityMode: cosmosCapacityMode
+    containerAutoscaleMaxThroughput: cosmosDatabaseAutoscaleMaxThroughput
   }
 }
 
@@ -414,6 +455,8 @@ module searchService 'modules/search.bicep' = {
     logAnalyticsId: logAnalytics.outputs.logAnalyticsId
 
     enablePrivateNetworking: enablePrivateNetworking
+    skuName: searchSkuName
+    semanticSearchSku: searchSemanticSearchSku
   }
 }
 

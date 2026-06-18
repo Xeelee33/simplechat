@@ -1,7 +1,7 @@
 # test_custom_pages_wiring.py
 """
 Functional test for Custom Pages wiring.
-Version: 0.242.040
+Version: 0.242.045
 Implemented in: 0.242.023
 
 This test ensures that the Custom Pages feature is wired through settings,
@@ -39,7 +39,7 @@ def test_custom_pages_configuration():
     config = read_text("application/single_app/config.py")
     settings = read_text("application/single_app/functions_settings.py")
 
-    assert_contains(config, 'VERSION = "0.242.040"', "version bump")
+    assert_contains(config, 'VERSION = "0.242.045"', "version bump")
     assert_contains(config, 'cosmos_custom_pages_container_name = "custom_pages"', "custom pages container name")
     assert_contains(config, 'cosmos_custom_pages_container = cosmos_database.create_container_if_not_exists', "custom pages container creation")
     assert_contains(settings, "'enable_custom_pages': False", "custom pages disabled default")

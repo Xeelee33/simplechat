@@ -75,6 +75,7 @@ This is the primary recommended deployment path for the repo.
 
 ### Required Software
 - **Azure Developer CLI** ([install guide](https://learn.microsoft.com/en-us/azure/developer/azure-developer-cli/install-azd))
+- **Python 3.12** ([download](https://www.python.org/downloads/)) with `python` available on Windows and `python3` available on Linux/macOS. The `deployers/azure.yaml` `preprovision` and `postprovision` hooks call Python for prerequisite validation, dependency installation, and post-provision configuration.
 - **Git** for repository cloning
 - **Azure CLI** (usually installed with azd)
 
@@ -206,17 +207,8 @@ azd env set ENVIRONMENT_TYPE "dev|staging|prod"
 ```
 
 **Service Configuration:**
-```bash
-# Enable specific features
-azd env set ENABLE_CONTENT_SAFETY "true"
-azd env set ENABLE_IMAGE_GENERATION "true"
-azd env set ENABLE_REDIS_CACHE "true"
 
-# Set service tiers
-azd env set APP_SERVICE_SKU "P1v3"
-azd env set COSMOS_DB_THROUGHPUT "1000"
-azd env set SEARCH_SKU "standard"
-```
+The AZD path uses the Bicep defaults: App Service P1v3, Azure AI Search Standard S1 with standard Semantic Ranker, and Cosmos DB provisioned shared autoscale throughput for the `SimpleChat` database. Free Search and serverless Cosmos DB are available only as explicit Bicep parameter customizations for short-lived MVP or evaluation phases.
 
 **Azure Government:**
 ```bash
@@ -227,24 +219,13 @@ azd env set AZURE_LOCATION "USGov Virginia"
 ### Resource Sizing
 
 **Development/Testing:**
-```bash
-azd env set ENVIRONMENT_TYPE "dev"
-# Uses: B1 App Service, 400 RU/s Cosmos, Basic Search
-```
+Use the default Bicep sizing unless you are intentionally running a short-lived MVP. The default uses provisioned Cosmos DB and Azure AI Search Standard S1 so workspace search can use standard Semantic Ranker capacity.
 
 **Production:**  
-```bash
-azd env set ENVIRONMENT_TYPE "prod"
-# Uses: P1v3 App Service, 1000 RU/s Cosmos, Standard Search
-```
+The default AZD/Bicep path is the production-leaning baseline: P1v3 App Service, Cosmos DB provisioned shared autoscale throughput, and Azure AI Search Standard S1.
 
 **Custom Sizing:**
-```bash
-azd env set APP_SERVICE_SKU "P2v3"
-azd env set COSMOS_DB_THROUGHPUT "4000" 
-azd env set SEARCH_SKU "standard2"
-azd env set OPENAI_SKU "S0"
-```
+Customize Bicep parameters such as `cosmosDatabaseAutoscaleMaxThroughput`, `searchSkuName`, and `searchSemanticSearchSku` only when your cost, quota, or scale model requires it.
 
 ## Post-Deployment Configuration
 
@@ -519,15 +500,6 @@ azd up
 - Consider reserved instances for predictable usage
 
 **Cost-effective configurations:**
-```bash
-# Development environments
-azd env set APP_SERVICE_SKU "B1"
-azd env set COSMOS_DB_THROUGHPUT "400"
-azd env set SEARCH_SKU "basic"
-
-# Production with cost optimization
-azd env set ENABLE_REDIS_CACHE "false"  # Start without Redis
-azd env set COSMOS_DB_AUTOSCALE "true"  # Use autoscale for variable load
-```
+For short-lived MVP or evaluation environments, you can override Bicep parameters to use Free Azure AI Search/Semantic Ranker or Cosmos DB serverless. Those are cost-focused exceptions; the repo defaults remain Standard S1 Search and provisioned Cosmos DB because they avoid common document-search and semantic-quota failures.
 
 This Azure Developer CLI approach provides the fastest path from zero to a fully functional Simple Chat deployment with minimal manual configuration required.

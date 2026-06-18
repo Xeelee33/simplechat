@@ -2,7 +2,7 @@
 #!/usr/bin/env python3
 """
 Functional test for authenticated request login activity tracking.
-Version: 0.241.130
+Version: 0.241.154
 Implemented in: 0.241.130
 
 This test ensures that passive authenticated browser requests emit a throttled

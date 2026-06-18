@@ -64,7 +64,7 @@ export function escapeHtml(str) {
 }
 
 // Render plugins table (parameterized for tbody selector and button handlers)
-export function renderPluginsTable({plugins, tbodySelector, onEdit, onDelete, onView, onGovern, onDuplicate, ensureTable = true, isAdmin = false}) {
+export function renderPluginsTable({plugins, tbodySelector, onEdit, onDelete, onView, onToggleEnabled, onGovern, onDuplicate, ensureTable = true, isAdmin = false}) {
   // Optionally ensure the table is present before rendering
   if (ensureTable) {
     ensurePluginsTableInRoot();
@@ -98,6 +98,7 @@ export function renderPluginsTable({plugins, tbodySelector, onEdit, onDelete, on
     const pluginName = plugin.name || '';
     const displayName = humanizeName(plugin.display_name || plugin.name);
     const description = plugin.description || 'No description available';
+    const isEnabled = plugin.is_enabled !== false;
     const truncatedDesc = truncateDescription(description, 90);
 
     const nameCell = document.createElement('td');
@@ -112,6 +113,13 @@ export function renderPluginsTable({plugins, tbodySelector, onEdit, onDelete, on
       globalBadge.textContent = 'Global';
       nameCell.appendChild(globalBadge);
     }
+    nameCell.appendChild(document.createTextNode(' '));
+    const statusBadge = document.createElement('span');
+    statusBadge.className = isEnabled
+      ? 'badge bg-success-subtle text-success-emphasis border border-success-subtle'
+      : 'badge bg-secondary';
+    statusBadge.textContent = isEnabled ? 'Enabled' : 'Disabled';
+    nameCell.appendChild(statusBadge);
 
     const descriptionCell = document.createElement('td');
     descriptionCell.className = 'text-muted small';
@@ -129,6 +137,15 @@ export function renderPluginsTable({plugins, tbodySelector, onEdit, onDelete, on
       if (isAdmin) {
         actionButtons.appendChild(createActionButton('btn btn-sm btn-outline-info govern-plugin-btn', 'Govern action', 'bi bi-shield-check', onGovern, pluginName));
         actionButtons.appendChild(createActionButton('btn btn-sm btn-outline-secondary duplicate-plugin-btn', 'Duplicate action', 'bi bi-files', onDuplicate, pluginName));
+        if (onToggleEnabled) {
+          actionButtons.appendChild(createActionButton(
+            `btn btn-sm ${isEnabled ? 'btn-outline-warning' : 'btn-outline-success'} toggle-plugin-btn`,
+            isEnabled ? 'Disable action' : 'Enable action',
+            `bi ${isEnabled ? 'bi-toggle-off' : 'bi-toggle-on'}`,
+            onToggleEnabled,
+            pluginName
+          ));
+        }
       }
       actionButtons.appendChild(createActionButton('btn btn-sm btn-outline-danger delete-plugin-btn', 'Delete action', 'bi bi-trash', onDelete, pluginName));
     }
@@ -353,6 +370,15 @@ export async function getErrorMessageFromResponse(response, fallbackMessage = 'R
     return fallbackMessage;
   }
 
+  const trimmedResponseText = responseText.trim();
+  const normalizedResponseText = trimmedResponseText.toLowerCase();
+  if (normalizedResponseText.startsWith('<!doctype') || normalizedResponseText.startsWith('<html')) {
+    if (response.status === 404) {
+      return 'Requested API endpoint was not found.';
+    }
+    return fallbackMessage;
+  }
+
   try {
     const errorData = JSON.parse(responseText);
     return errorData.error || responseText;
@@ -364,18 +390,36 @@ export async function getErrorMessageFromResponse(response, fallbackMessage = 'R
 // Server-side validation fallback
 async function validatePluginManifestServerSide(pluginManifest) {
   try {
-    const response = await fetch('/api/admin/plugins/validate', {
+    const response = await fetch('/api/plugins/validate', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(pluginManifest)
     });
-    
+
+    if (response.status === 404) {
+      console.warn('Plugin validation endpoint is unavailable. Falling back to save-time validation.');
+      return {
+        valid: true,
+        errors: [],
+        warnings: ['Validation endpoint unavailable; using save-time validation only.']
+      };
+    }
+
+    if (!response.ok) {
+      const errorMessage = await getErrorMessageFromResponse(response, 'Validation request failed');
+      return {
+        valid: false,
+        errors: [errorMessage],
+        warnings: []
+      };
+    }
+
     const result = await response.json();
     return {
-      valid: result.valid,
-      errors: result.errors || [],
+      valid: Boolean(result.valid),
+      errors: result.errors || (result.error ? [result.error] : []),
       warnings: result.warnings || []
     };
   } catch (error) {

@@ -53,6 +53,11 @@ Once the application is running and you sign in with the Admin role, the Admin S
   <p>The Setup Walkthrough is the fastest way to move a fresh environment from partially configured to usable. It guides admins through the critical dependencies in the right order and skips steps that do not apply.</p>
 </div>
 
+<div class="latest-release-note-panel latest-release-accent--teal">
+  <h2>Need to change what users see first?</h2>
+  <p>Use the <a href="{{ '/how-to/admin_ui_settings/' | relative_url }}">branding, home page, and support settings how-to</a> for step-by-step guidance on logos, application title, landing page text, health checks, Swagger, classification banners, Support, external links, and system settings.</p>
+</div>
+
 ![Admin Settings page](./images/admin_settings_page.png)
 
 ## Setup Walkthrough
@@ -106,21 +111,23 @@ Key configuration sections include:
 - **External Links**: Custom navigation links to external resources with configurable menu behavior
 - **System Settings**: Maximum file size, conversation history limit, default system prompt
 
+For practical operator steps, see [Configure Branding, Home Page, and Support Settings]({{ '/how-to/admin_ui_settings/' | relative_url }}).
+
 ### 2. AI Models
-- **GPT Configuration**: 
+- **Chat Model**:
   - Configure Azure OpenAI endpoint(s) for chat models
   - Supports Direct endpoint or APIM (API Management)
   - Allows Key or Managed Identity authentication
   - Test connection button
   - Select multiple active deployment(s) - users can choose from available models
   - Multi-model selection for users
-  
+
 - **Embeddings Configuration**:
   - Configure Azure OpenAI endpoint(s) for embedding models
   - Supports Direct/APIM, Key/Managed Identity
   - Test connection
   - Select active deployment
-  
+
 - **Image Generation** *(Optional)*:
   - Enable/disable feature
   - Configure Azure OpenAI DALL-E endpoint
@@ -130,10 +137,10 @@ Key configuration sections include:
 
 ### 3. Workspaces
 - **Personal Workspaces**: Enable/disable "Your Workspace" (personal docs)
-- **Group Workspaces**: 
+- **Group Workspaces**:
   - Enable/disable "Groups" (group docs)
   - Option to enforce `CreateGroups` RBAC role for creating new groups
-- **Public Workspaces**: 
+- **Public Workspaces**:
   - Enable/disable "Public" (public docs)
   - Option to enforce `CreatePublicWorkspaces` RBAC role for creating new public workspaces
 - **File Sharing**:
@@ -222,6 +229,122 @@ Key configuration sections include:
   - Enable logging of file processing events
   - Logs stored in Cosmos DB file_processing container
   - Optional time-based auto-disable feature
+
+## Admin Settings Execution Guide
+
+Use this section when you need to configure an area, validate it, and know what to check after saving. Open **Admin Settings**, select the named tab, make the change, use the local test buttons where the tab provides them, then click **Save Settings**.
+
+### General
+
+![Annotated General settings controls](./images/admin-settings/general.png)
+
+1. Open **General** and set the app title, light/dark logos, favicon, home page Markdown, default theme, and default navigation layout.
+2. Configure operational visibility: authenticated and unauthenticated health checks, Swagger/OpenAPI, classification banner, Support menu, Latest Features visibility, and external links.
+3. Set global system behavior such as file size limits, conversation history, and the default system prompt, then save and refresh the home page to confirm branding and navigation changes.
+
+### AI Models
+
+![Annotated AI model controls](./images/admin-settings/ai-models.png)
+
+1. Open **AI Models** and add the chat model endpoint configuration: direct Azure OpenAI or APIM endpoint, authentication type, deployment names, and any default model choices.
+2. Configure **Embeddings** before enabling retrieval-backed workspace features, then use the connection test to verify the endpoint and authentication path.
+3. Enable **Processing Thoughts** and **Image Generation** only for deployments where users should see reasoning traces or generate images, then save and confirm the model selector appears in chat.
+
+### Agents And Actions
+
+![Annotated Agents and actions controls](./images/admin-settings/agents-actions.png)
+
+1. Open **Agents and Actions** and choose whether document actions such as Analyze and Document Comparison should appear in Chat and Workflow action menus.
+2. Enable agents, choose workspace-specific or global mode, set orchestration behavior, and manage global agents or approvals if admins curate shared agents centrally.
+3. Enable action scopes and core plugins users are allowed to invoke. Save global agent/action changes, restart the web app when the tab notes it is required, and then verify the runtime action menus.
+
+### Logging
+
+![Annotated Logging controls](./images/admin-settings/logging.png)
+
+1. Open **Logging** and enable Application Insights logging when agent, orchestration, or operational events should flow into Azure monitoring.
+2. Use **Debug Logging** for short diagnosis windows only, set an auto-disable time, and avoid leaving token or key capture enabled longer than necessary.
+3. Enable **File Processing Logs** when admins need upload, extraction, indexing, or sync troubleshooting history, then save and confirm the expected log container or telemetry stream receives events.
+
+### Scale
+
+![Annotated Scale controls](./images/admin-settings/scale.png)
+
+1. Open **Scale** and configure Redis when the app will run multiple instances or needs distributed session storage; test the Redis connection before saving.
+2. Use the Cosmos throughput card to refresh status, choose database or container scope, set autoscale thresholds, enforce global policy when appropriate, and convert eligible manual throughput to native autoscale.
+3. Configure Azure Front Door when authentication redirects and user-facing URLs should use the routed domain, then save and validate sign-in through the Front Door URL.
+
+### Control Center
+
+![Annotated Control Center controls](./images/admin-settings/control-center.png)
+
+1. Open **Control Center** and set the auto-refresh interval used by dashboard and management views.
+2. Choose which overview behavior should be available to admins, especially in larger deployments where refresh frequency affects load.
+3. Save the settings, open Control Center, and confirm the dashboard refresh cadence and management tables behave as configured.
+
+### Workspaces
+
+![Annotated Workspace controls](./images/admin-settings/workspaces.png)
+
+1. Open **Workspaces** and enable the workspace types your users should see: personal, group, public, workflow, and file sharing options.
+2. Configure upload behavior, chat file uploads, metadata extraction, multimodal vision, document classification, and any group or public workspace role requirements.
+3. Set retention policies, workspace scope lock, and user agreement text, then save and verify the corresponding workspace navigation and upload actions with a normal user account.
+
+### File Sync
+
+![Annotated File Sync controls](./images/admin-settings/file-sync.png)
+
+1. Open **File Sync** and enable the connector, visible source types, and the workspace scopes where synced files may appear.
+2. Configure personal, group, and public workspace sync behavior before creating sources so each source lands in the correct ownership model.
+3. Use **Manage File Sync Sources** and **File Sync App Role Setup** to create source definitions and app roles, then run a sync and verify badges, history, and imported documents.
+
+### Global Identity
+
+![Annotated global identity controls](./images/admin-settings/global-identity.png)
+
+1. Open **Workspace Identities** to review reusable identities that File Sync and workspace connectors can share across sources.
+2. Create or update identity mappings when multiple sync sources should use the same managed identity, app registration, or delegated access profile.
+3. Save the identity configuration, return to File Sync, and assign the identity to a source before running the connector test or sync job.
+
+### Citations
+
+![Annotated Citation controls](./images/admin-settings/citation.png)
+
+1. Open **Citations** and enable enhanced citations when users need direct file preview, source documents, or richer citation playback.
+2. Configure Azure Storage using either connection string or managed identity endpoint, then test access before saving.
+3. Upload or reprocess a document after saving and confirm chat citations can open the expected preview or source reference.
+
+### Safety
+
+![Annotated Safety controls](./images/admin-settings/safety.png)
+
+1. Open **Safety** and configure Azure Content Safety endpoint routing, authentication, and connection testing before enabling filtering for users.
+2. Enable user feedback, safety violation admin role enforcement, and feedback admin role enforcement according to your review process.
+3. Configure conversation archiving versus deletion, save, and verify that feedback and safety review pages respect the selected RBAC controls.
+
+### Security
+
+![Annotated Security controls](./images/admin-settings/security.png)
+
+1. Open **Security** and review any role-gated or secret-management settings that control access to sensitive admin tools.
+2. Enable required app roles before turning on enforcement, then assign those roles in Entra ID to the admin groups that need access.
+3. Save and validate with both an authorized admin and a normal user so restricted views remain reachable only to the intended audience.
+
+### Search And Extract
+
+![Annotated Search and Extract controls](./images/admin-settings/search-extract.png)
+
+1. Open **Search and Extract** and configure Web Search, URL Access, and Deep Research only for deployments where admins have approved outbound source review behavior.
+2. Configure Azure AI Search and Document Intelligence endpoints, select Read, Layout, or Auto extraction mode, and test each connection.
+3. Set chunk sizes and multimedia extraction services such as Video Indexer and Speech, then upload a document or media file to confirm extraction, indexing, and citation behavior.
+
+### Send Feedback
+
+![Annotated Send Feedback controls](./images/admin-settings/send-feedback.png)
+
+1. Open **Send Feedback** from Admin Settings or the Support menu after the Support destination is enabled in General.
+2. Enter the issue, enhancement request, or operational context with enough detail for admins to reproduce or triage it.
+3. Submit the feedback and confirm it arrives through the configured support recipient or review workflow.
 
 ## Navigation Options
 

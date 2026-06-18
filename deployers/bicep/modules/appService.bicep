@@ -97,8 +97,13 @@ resource webApp 'Microsoft.Web/sites@2022-03-01' = {
       healthCheckPath: '/external/healthcheck'
       appSettings: [
         { name: 'AZURE_ENVIRONMENT', value: azurePlatform }
+        { name: 'SIMPLECHAT_RUN_BACKGROUND_TASKS', value: '1' }
         { name: 'SCM_DO_BUILD_DURING_DEPLOYMENT', value: 'false' }
+        { name: 'AZURE_SUBSCRIPTION_ID', value: subscription().subscriptionId }
+        { name: 'AZURE_RESOURCE_GROUP', value: resourceGroup().name }
         { name: 'AZURE_COSMOS_ENDPOINT', value: cosmosDb.properties.documentEndpoint }
+        { name: 'AZURE_COSMOS_ACCOUNT_NAME', value: cosmosDb.name }
+        { name: 'AZURE_COSMOS_DATABASE_NAME', value: 'SimpleChat' }
         { name: 'AZURE_COSMOS_AUTHENTICATION_TYPE', value: toLower(authenticationType) }
 
         // Only add this setting if authenticationType is 'key'

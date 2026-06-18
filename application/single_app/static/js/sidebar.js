@@ -9,6 +9,16 @@
  */
 
 // Utility functions for user settings
+const sidebarMenuStateKeys = new Set([
+  'workspaces',
+  'support',
+  'externalLinks',
+  'customPages',
+  'adminSettings',
+  'controlCenter',
+  'conversations'
+]);
+
 async function getUserSettings() {
   if (window.simplechatUserSettings && typeof window.simplechatUserSettings === 'object') {
     return window.simplechatUserSettings;
@@ -39,6 +49,174 @@ async function setUserNavLayout(navLayout) {
   } catch (e) {
     console.error('Error saving nav layout setting:', e);
   }
+}
+
+function normalizeSidebarMenuState(menuState) {
+  if (!menuState || typeof menuState !== 'object' || Array.isArray(menuState)) {
+    return {};
+  }
+
+  return Object.entries(menuState).reduce((normalizedState, [key, value]) => {
+    if (!sidebarMenuStateKeys.has(key)) {
+      return normalizedState;
+    }
+
+    if (typeof value === 'boolean') {
+      normalizedState[key] = value;
+      return normalizedState;
+    }
+
+    if (typeof value === 'string') {
+      const normalizedValue = value.trim().toLowerCase();
+      if (normalizedValue === 'true' || normalizedValue === 'false') {
+        normalizedState[key] = normalizedValue === 'true';
+      }
+    }
+
+    return normalizedState;
+  }, {});
+}
+
+function readInitialSidebarMenuState() {
+  if (window.simplechatSidebarMenuState && typeof window.simplechatSidebarMenuState === 'object') {
+    return normalizeSidebarMenuState(window.simplechatSidebarMenuState);
+  }
+
+  const stateElement = document.getElementById('sidebar-menu-state-data');
+  if (!stateElement) {
+    return {};
+  }
+
+  try {
+    const parsedState = JSON.parse(stateElement.textContent || '{}');
+    return normalizeSidebarMenuState(parsedState);
+  } catch (error) {
+    console.warn('Unable to parse sidebar menu state:', error);
+    return {};
+  }
+}
+
+function getSidebarMenuStateCache() {
+  window.simplechatSidebarMenuState = normalizeSidebarMenuState(
+    window.simplechatSidebarMenuState || readInitialSidebarMenuState()
+  );
+
+  return window.simplechatSidebarMenuState;
+}
+
+async function saveSidebarMenuState(menuKey, isExpanded) {
+  if (!menuKey) {
+    return false;
+  }
+
+  if (!sidebarMenuStateKeys.has(menuKey)) {
+    console.warn('Ignoring unsupported sidebar menu state key:', menuKey);
+    return false;
+  }
+
+  const currentMenuState = getSidebarMenuStateCache();
+  const nextMenuState = normalizeSidebarMenuState({
+    ...currentMenuState,
+    [menuKey]: Boolean(isExpanded)
+  });
+  window.simplechatSidebarMenuState = nextMenuState;
+
+  try {
+    const response = await fetch('/api/user/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ settings: { sidebarMenuState: nextMenuState } })
+    });
+
+    if (!response.ok) {
+      console.warn('Sidebar menu state was not saved:', response.statusText);
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    console.warn('Error saving sidebar menu state:', error);
+    return false;
+  }
+}
+
+function getSidebarMenuToggle(menuKey) {
+  return Array.from(document.querySelectorAll('[data-sidebar-menu-key]'))
+    .find((toggle) => toggle.dataset.sidebarMenuKey === menuKey) || null;
+}
+
+function setSidebarMenuExpanded(toggle, isExpanded, options = {}) {
+  if (!toggle) {
+    return false;
+  }
+
+  const section = document.getElementById(toggle.dataset.sidebarMenuTarget || '');
+  const caret = document.getElementById(toggle.dataset.sidebarMenuCaret || '')
+    || toggle.querySelector('.bi-caret-down-fill');
+
+  if (section) {
+    section.classList.toggle('d-none', !isExpanded);
+    section.setAttribute('aria-hidden', String(!isExpanded));
+  }
+
+  toggle.setAttribute('aria-expanded', String(isExpanded));
+
+  if (caret) {
+    caret.style.transform = isExpanded ? 'rotate(0deg)' : 'rotate(-90deg)';
+  }
+
+  if (options.persist !== false) {
+    saveSidebarMenuState(toggle.dataset.sidebarMenuKey, isExpanded);
+  }
+
+  return isExpanded;
+}
+
+function setPersistentSidebarMenuExpanded(menuKey, isExpanded, options = {}) {
+  const toggle = getSidebarMenuToggle(menuKey);
+  return setSidebarMenuExpanded(toggle, isExpanded, options);
+}
+
+function initializePersistentSidebarMenus() {
+  const menuState = getSidebarMenuStateCache();
+
+  document.querySelectorAll('[data-sidebar-menu-key][data-sidebar-menu-target]').forEach((toggle) => {
+    if (toggle.dataset.sidebarMenuBound === 'true') {
+      return;
+    }
+
+    const menuKey = toggle.dataset.sidebarMenuKey;
+    const section = document.getElementById(toggle.dataset.sidebarMenuTarget || '');
+    const defaultExpanded = toggle.getAttribute('aria-expanded') !== 'false'
+      && !(section && section.classList.contains('d-none'));
+    const hasSavedState = Object.prototype.hasOwnProperty.call(menuState, menuKey);
+    const isExpanded = hasSavedState ? menuState[menuKey] === true : defaultExpanded;
+
+    toggle.dataset.sidebarMenuBound = 'true';
+    setSidebarMenuExpanded(toggle, isExpanded, { persist: false });
+
+    toggle.addEventListener('click', (event) => {
+      const eventTarget = event.target instanceof Element ? event.target : null;
+      if (eventTarget && eventTarget.closest('[data-sidebar-menu-ignore="true"]')) {
+        return;
+      }
+
+      event.preventDefault();
+      const nextExpanded = toggle.getAttribute('aria-expanded') !== 'true';
+      setSidebarMenuExpanded(toggle, nextExpanded);
+    });
+
+    toggle.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') {
+        return;
+      }
+
+      event.preventDefault();
+      const nextExpanded = toggle.getAttribute('aria-expanded') !== 'true';
+      setSidebarMenuExpanded(toggle, nextExpanded);
+    });
+  });
 }
 
 // Update toggle text based on current layout
@@ -184,6 +362,7 @@ function initializeChatSidebarDrawer() {
 
 if (typeof window !== 'undefined') {
   window.toggleSidebar = toggleSidebar;
+  window.setPersistentSidebarMenuExpanded = setPersistentSidebarMenuExpanded;
 }
 
 // Initialize sidebar navigation functionality
@@ -233,6 +412,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   initializeSidebarToggleButtons();
+  initializePersistentSidebarMenus();
   initializeChatSidebarDrawer();
 });
 
@@ -243,6 +423,8 @@ if (typeof module !== 'undefined' && module.exports) {
     setUserNavLayout,
     updateNavLayoutToggleText,
     toggleSidebar,
-    setSidebarExpandedState
+    setSidebarExpandedState,
+    initializePersistentSidebarMenus,
+    setPersistentSidebarMenuExpanded
   };
 }

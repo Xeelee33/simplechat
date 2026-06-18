@@ -1,4 +1,3 @@
-
 # Azure Functions artifacts
 bin
 obj
@@ -52,4 +51,8 @@ nul
 /artifacts/tmp
 scripts/agent.json
 scripts/me.json
+.github/instructions/python-venv-path.instructions.md
 .github/instructions/local.instructions.md
+
+
+deploy.zip

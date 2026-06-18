@@ -55,6 +55,8 @@ def get_personal_agents(user_id):
             cleaned_agent.setdefault('model_endpoint_id', '')
             cleaned_agent.setdefault('model_id', '')
             cleaned_agent.setdefault('model_provider', '')
+            cleaned_agent.setdefault('tags', [])
+            cleaned_agent.setdefault('icon', {})
             # Remove empty reasoning_effort to prevent validation errors
             if cleaned_agent.get('reasoning_effort') == '':
                 cleaned_agent.pop('reasoning_effort', None)
@@ -96,6 +98,8 @@ def get_personal_agent(user_id, agent_id):
         cleaned_agent.setdefault('model_endpoint_id', '')
         cleaned_agent.setdefault('model_id', '')
         cleaned_agent.setdefault('model_provider', '')
+        cleaned_agent.setdefault('tags', [])
+        cleaned_agent.setdefault('icon', {})
         # Remove empty reasoning_effort to prevent validation errors
         if cleaned_agent.get('reasoning_effort') == '':
             cleaned_agent.pop('reasoning_effort', None)
@@ -138,6 +142,8 @@ def save_personal_agent(user_id, agent_data, actor_user_id=None):
         cleaned_agent.setdefault('model_endpoint_id', '')
         cleaned_agent.setdefault('model_id', '')
         cleaned_agent.setdefault('model_provider', '')
+        cleaned_agent.setdefault('tags', [])
+        cleaned_agent.setdefault('icon', {})
         if 'id' not in cleaned_agent:
             cleaned_agent['id'] = str(f"{user_id}_{cleaned_agent.get('name', 'default')}")
 
@@ -188,6 +194,8 @@ def save_personal_agent(user_id, agent_data, actor_user_id=None):
         cleaned_agent.setdefault('reasoning_effort', '')
         cleaned_agent.setdefault('actions_to_load', [])
         cleaned_agent.setdefault('other_settings', {})
+        cleaned_agent.setdefault('tags', [])
+        cleaned_agent.setdefault('icon', {})
 
         # Remove empty reasoning_effort to avoid schema validation errors
         if cleaned_agent.get('reasoning_effort') == '':
@@ -197,7 +205,7 @@ def save_personal_agent(user_id, agent_data, actor_user_id=None):
         cleaned_agent.setdefault('agent_type', 'local')
 
         # Store sensitive keys in Key Vault if enabled
-        cleaned_agent = keyvault_agent_save_helper(cleaned_agent, cleaned_agent.get('id', ''), scope="user")
+        cleaned_agent = keyvault_agent_save_helper(cleaned_agent, cleaned_agent.get('id', ''), scope="user", existing_agent=existing_agent)
         if cleaned_agent.get('max_completion_tokens') is None:
             cleaned_agent['max_completion_tokens'] = -1
         result = cosmos_personal_agents_container.upsert_item(body=cleaned_agent)
@@ -206,6 +214,8 @@ def save_personal_agent(user_id, agent_data, actor_user_id=None):
         cleaned_result.setdefault('is_global', False)
         cleaned_result.setdefault('is_group', False)
         cleaned_result.setdefault('agent_type', 'local')
+        cleaned_result.setdefault('tags', [])
+        cleaned_result.setdefault('icon', {})
         return cleaned_result
         
     except Exception as e:
