@@ -1,4 +1,3 @@
-
 # Azure Functions artifacts
 bin
 obj
@@ -53,3 +52,9 @@ nul
 scripts/agent.json
 scripts/me.json
 .github/instructions/python-venv-path.instructions.md
+.github/instructions/local.instructions.md
+
+
+deploy.zip
+application/teams_app/manifest.json
+application/teams_app/*.zip
