@@ -1,8 +1,8 @@
 # test_model_endpoint_management_cloud_default.py
 """
 Functional test for model endpoint management cloud normalization.
-Version: 0.241.008
-Implemented in: 0.241.008
+Version: 0.242.072
+Implemented in: 0.242.072
 
 This test ensures model endpoint normalization enforces management_cloud from
 AZURE_ENVIRONMENT when cloud selection is not user-editable in the admin UI.
