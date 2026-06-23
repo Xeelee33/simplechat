@@ -90,6 +90,55 @@ function createDropdownDivider() {
     return divider;
 }
 
+export function createFloatingSearchableSelectDropdownConfig({
+    viewportPadding = 12,
+    maxWidth = 360,
+} = {}) {
+    const matchReferenceWidthModifier = {
+        name: 'matchReferenceWidth',
+        enabled: true,
+        phase: 'beforeWrite',
+        requires: ['computeStyles'],
+        fn({ state }) {
+            const referenceWidth = Math.ceil(state.rects.reference.width || 0);
+            const viewportWidth = Math.max(0, window.innerWidth - (viewportPadding * 2));
+            const maxMenuWidth = Math.max(0, Math.min(maxWidth, viewportWidth));
+            const menuMinWidth = Math.min(referenceWidth, maxMenuWidth);
+
+            state.styles.popper.minWidth = `${menuMinWidth}px`;
+            state.styles.popper.maxWidth = `${maxMenuWidth}px`;
+        },
+    };
+
+    return {
+        boundary: 'viewport',
+        reference: 'toggle',
+        autoClose: 'outside',
+        popperConfig: defaultConfig => {
+            const baseModifiers = Array.isArray(defaultConfig.modifiers)
+                ? defaultConfig.modifiers.filter(modifier => !['preventOverflow', 'matchReferenceWidth'].includes(modifier.name))
+                : [];
+
+            return {
+                ...defaultConfig,
+                strategy: 'fixed',
+                modifiers: [
+                    ...baseModifiers,
+                    matchReferenceWidthModifier,
+                    {
+                        name: 'preventOverflow',
+                        options: {
+                            boundary: 'viewport',
+                            padding: viewportPadding,
+                            rootBoundary: 'viewport',
+                        },
+                    },
+                ],
+            };
+        },
+    };
+}
+
 export function initializeFilterableDropdownSearch({
     dropdownEl,
     buttonEl,
@@ -101,6 +150,7 @@ export function initializeFilterableDropdownSearch({
     isAlwaysVisibleItem,
     itemSelector = '.dropdown-item',
     clearSearchOnHide = true,
+    onFilterApplied,
 }) {
     if (!menuEl || !searchInputEl || !itemsContainerEl) {
         return null;
@@ -132,6 +182,8 @@ export function initializeFilterableDropdownSearch({
         if (searchTerm && visibleMatchCount === 0) {
             itemsContainerEl.appendChild(createNoMatchesElement(emptyMessage));
         }
+
+        onFilterApplied?.({ searchTerm, visibleMatchCount });
     };
 
     const resetFilter = () => {
@@ -203,6 +255,7 @@ export function createSearchableSingleSelect({
     emptySearchMessage,
     getOptionLabel,
     getOptionSearchText,
+    renderOptionContent,
     dropdownConfig,
 }) {
     if (!selectEl || !dropdownEl || !buttonEl || !buttonTextEl || !menuEl || !searchInputEl || !itemsContainerEl) {
@@ -211,6 +264,7 @@ export function createSearchableSingleSelect({
 
     const readOptionLabel = getOptionLabel || (option => option.textContent.trim());
     const readOptionSearchText = getOptionSearchText || (option => option.textContent.trim());
+    const renderOption = typeof renderOptionContent === 'function' ? renderOptionContent : null;
     const resolvedDropdownConfig = dropdownConfig || {
         autoClose: 'outside',
     };
@@ -282,10 +336,19 @@ export function createSearchableSingleSelect({
                 item.disabled = true;
             }
 
-            const textEl = document.createElement('span');
-            textEl.className = 'chat-searchable-select-item-text';
-            textEl.textContent = optionLabel;
-            item.appendChild(textEl);
+            if (renderOption) {
+                const renderedContent = renderOption(option, optionLabel);
+                if (renderedContent instanceof Node) {
+                    item.appendChild(renderedContent);
+                }
+            }
+
+            if (!item.childNodes.length) {
+                const textEl = document.createElement('span');
+                textEl.className = 'chat-searchable-select-item-text';
+                textEl.textContent = optionLabel;
+                item.appendChild(textEl);
+            }
 
             itemsContainerEl.appendChild(item);
         };
