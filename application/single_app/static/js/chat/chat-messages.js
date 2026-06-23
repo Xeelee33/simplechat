@@ -1036,7 +1036,14 @@ export function appendMessage(
       });
     }
 
-    scrollChatToBottom();
+    // For AI messages, only auto-scroll if the user is currently near
+    // the bottom. This prevents a final jump after a long answer if
+    // the user has scrolled up to read earlier content.
+    if (typeof isChatNearBottom === 'function' && typeof scrollChatToBottom === 'function') {
+      if (isChatNearBottom()) {
+        scrollChatToBottom();
+      }
+    }
     return; // <<< EXIT EARLY FOR AI MESSAGES
 
     // --- Handle ALL OTHER message types ---
@@ -1106,7 +1113,7 @@ export function appendMessage(
       
       // Validate image URL before creating img tag
       if (messageContent && messageContent !== 'null' && messageContent.trim() !== '') {
-        messageContentHtml = `<img src="${messageContent}" alt="${isUserUpload ? 'Uploaded' : 'Generated'} Image" class="generated-image" style="width: 170px; height: 170px; cursor: pointer;" data-image-src="${messageContent}" onload="scrollChatToBottom()" onerror="this.src='/static/images/image-error.png'; this.alt='Failed to load image';" />`;
+        messageContentHtml = `<img src="${messageContent}" alt="${isUserUpload ? 'Uploaded' : 'Generated'} Image" class="generated-image" style="width: 170px; height: 170px; cursor: pointer;" data-image-src="${messageContent}" onerror="this.src='/static/images/image-error.png'; this.alt='Failed to load image';" />`;
       } else {
         messageContentHtml = `<div class="alert alert-warning"><i class="bi bi-exclamation-triangle me-2"></i>Failed to ${isUserUpload ? 'load' : 'generate'} image - invalid response from image service</div>`;
       }
@@ -1378,7 +1385,16 @@ export function appendMessage(
       }
     }
 
-    scrollChatToBottom();
+    // For new user/file/image messages, scroll to bottom once so the
+    // user sees what they just sent. For history loads, only scroll
+    // if they are already near the bottom.
+    if (isNewMessage && typeof scrollChatToBottom === 'function') {
+      scrollChatToBottom();
+    } else if (typeof isChatNearBottom === 'function' && typeof scrollChatToBottom === 'function') {
+      if (isChatNearBottom()) {
+        scrollChatToBottom();
+      }
+    }
   } // End of the large 'else' block for non-AI messages
 }
 
@@ -1436,7 +1452,7 @@ export function actuallySendMessage(finalMessageToSend) {
   const tempUserMessageId = `temp_user_${Date.now()}`;
   
   // Append user message first with temporary ID
-  appendMessage("You", finalMessageToSend, null, tempUserMessageId);
+  appendMessage("You", finalMessageToSend, null, tempUserMessageId, false, [], [], [], null, null, null, true);
   userInput.value = "";
   userInput.style.height = "";
   // Update send button visibility after clearing input
