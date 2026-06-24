@@ -1113,7 +1113,9 @@ export function appendMessage(
       
       // Validate image URL before creating img tag
       if (messageContent && messageContent !== 'null' && messageContent.trim() !== '') {
-        messageContentHtml = `<img src="${messageContent}" alt="${isUserUpload ? 'Uploaded' : 'Generated'} Image" class="generated-image" style="width: 170px; height: 170px; cursor: pointer;" data-image-src="${messageContent}" onerror="this.src='/static/images/image-error.png'; this.alt='Failed to load image';" />`;
+        const safeSrc = escapeHtml(messageContent);
+        const safeAlt = escapeHtml(isUserUpload ? 'Uploaded Image' : 'Generated Image');
+        messageContentHtml = `<img src="${safeSrc}" alt="${safeAlt}" class="generated-image" style="width: 170px; height: 170px; cursor: pointer;" data-image-src="${safeSrc}" />`;
       } else {
         messageContentHtml = `<div class="alert alert-warning"><i class="bi bi-exclamation-triangle me-2"></i>Failed to ${isUserUpload ? 'load' : 'generate'} image - invalid response from image service</div>`;
       }
@@ -1262,6 +1264,17 @@ export function appendMessage(
 
     // Append and scroll (common actions for non-AI)
     chatbox.appendChild(messageDiv);
+
+    // Attach safe error handler for generated/uploaded images
+    if (sender === "image") {
+      const imgEl = messageDiv.querySelector('img.generated-image');
+      if (imgEl) {
+        imgEl.addEventListener('error', () => {
+          imgEl.src = '/static/images/image-error.png';
+          imgEl.alt = 'Failed to load image';
+        });
+      }
+    }
 
     // Highlight code blocks in the messages
     messageDiv.querySelectorAll('pre code[class^="language-"]').forEach((block) => {
