@@ -1113,9 +1113,10 @@ export function appendMessage(
       
       // Validate image URL before creating img tag
       if (messageContent && messageContent !== 'null' && messageContent.trim() !== '') {
-        const safeSrc = escapeHtml(messageContent);
-        const safeAlt = escapeHtml(isUserUpload ? 'Uploaded Image' : 'Generated Image');
-        messageContentHtml = `<img src="${safeSrc}" alt="${safeAlt}" class="generated-image" style="width: 170px; height: 170px; cursor: pointer;" data-image-src="${safeSrc}" />`;
+        // Use a placeholder container; the actual <img> element will be
+        // created with DOM APIs after insertion to avoid string-based
+        // attribute interpolation in src/data-*.
+        messageContentHtml = '<span class="generated-image-placeholder"></span>';
       } else {
         messageContentHtml = `<div class="alert alert-warning"><i class="bi bi-exclamation-triangle me-2"></i>Failed to ${isUserUpload ? 'load' : 'generate'} image - invalid response from image service</div>`;
       }
@@ -1265,14 +1266,25 @@ export function appendMessage(
     // Append and scroll (common actions for non-AI)
     chatbox.appendChild(messageDiv);
 
-    // Attach safe error handler for generated/uploaded images
+    // Attach safe image element and error handler for generated/uploaded images
     if (sender === "image") {
-      const imgEl = messageDiv.querySelector('img.generated-image');
-      if (imgEl) {
+      const placeholder = messageDiv.querySelector('.generated-image-placeholder');
+      if (placeholder && messageContent && messageContent !== 'null' && messageContent.trim() !== '') {
+        const imgEl = document.createElement('img');
+        imgEl.className = 'generated-image';
+        imgEl.style.width = '170px';
+        imgEl.style.height = '170px';
+        imgEl.style.cursor = 'pointer';
+        imgEl.src = messageContent;
+        imgEl.alt = isUserUpload ? 'Uploaded Image' : 'Generated Image';
+        imgEl.dataset.imageSrc = messageContent;
+
         imgEl.addEventListener('error', () => {
           imgEl.src = '/static/images/image-error.png';
           imgEl.alt = 'Failed to load image';
         });
+
+        placeholder.replaceWith(imgEl);
       }
     }
 
