@@ -19,13 +19,18 @@ from model_endpoint_clients import (
     MODEL_ENDPOINT_PROTOCOL_ANTHROPIC,
     MODEL_ENDPOINT_PROTOCOL_AZURE_OPENAI,
     MODEL_ENDPOINT_PROTOCOL_OPENAI_STYLE,
+    MODEL_CONTEXT_MODE_FOLD_LATEST_USER,
+    ModelEndpointBehavior,
     build_anthropic_chat_client,
     build_openai_style_chat_client,
+    extract_chat_completion_response_text,
     infer_model_endpoint_protocol,
+    normalize_chat_completion_text,
 )
 from functions_model_endpoint_runtime import (
     MODEL_ENDPOINT_PROVIDER_ALLOWLIST,
     build_model_endpoint_context,
+    build_model_endpoint_sync_chat_client,
     build_semantic_kernel_chat_service_for_model,
 )
 import builtins
@@ -200,6 +205,55 @@ def _get_foundry_agent_label(agent_type):
 def _build_foundry_runtime_metadata(agent):
     metadata = getattr(agent, 'last_run_metadata', None)
     return metadata if isinstance(metadata, dict) else {}
+
+
+def _resolve_reasoning_effort_for_model(reasoning_effort, model_name, provider=None, endpoint=None):
+    resolved_reasoning_effort = ModelEndpointBehavior(provider, model_name).resolve_reasoning_effort(reasoning_effort)
+    if str(reasoning_effort or '').strip() and not resolved_reasoning_effort:
+        debug_print(
+            f"[ModelEndpoint] Skipping reasoning_effort for {model_name}; live Foundry probes show this parameter is model-family specific."
+        )
+    return resolved_reasoning_effort
+
+
+def _is_foundry_non_openai_model(provider, model_name):
+    return ModelEndpointBehavior(provider, model_name).is_foundry_non_openai_model
+
+
+def _should_inject_fact_memory_context_for_model(provider, model_name):
+    return ModelEndpointBehavior(provider, model_name).context_mode != MODEL_CONTEXT_MODE_FOLD_LATEST_USER
+
+
+def _build_plain_fact_memory_background_notes(prompt_payload):
+    note_values = []
+    for payload_key in ('instruction_payload', 'recall_payload'):
+        payload = prompt_payload.get(payload_key) if isinstance(prompt_payload, dict) else {}
+        for fact in (payload or {}).get('matched_facts', []) or []:
+            value = ' '.join(str(fact.get('value') or '').split())
+            if value and value not in note_values:
+                note_values.append(value[:240])
+
+    if not note_values:
+        return ''
+
+    return "Background notes for this chat:\n" + "\n".join(
+        f"- {value}" for value in note_values[:8]
+    )
+
+
+def _fold_fact_memory_notes_into_latest_user_message(conversation_history, prompt_payload):
+    notes = _build_plain_fact_memory_background_notes(prompt_payload)
+    if not notes:
+        return False
+
+    for message in reversed(conversation_history):
+        if message.get('role') != 'user':
+            continue
+        current_content = str(message.get('content') or '')
+        message['content'] = f"{notes}\n\nMessage:\n{current_content}"
+        return True
+
+    return False
 
 
 def _metadata_item_count(value):
@@ -1937,6 +1991,40 @@ def _has_chat_agent_selection(agent_selection):
         selected_id = str(agent_selection.get('id') or '').strip()
         return bool(selected_id or _get_chat_agent_selection_name(agent_selection))
     return bool(_get_chat_agent_selection_name(agent_selection))
+
+
+def _is_explicit_external_retrieval_requested(
+    web_search_enabled=False,
+    url_access_enabled=False,
+    source_review_enabled=False,
+    deep_research_enabled=False,
+):
+    """Return true when the current turn explicitly targets non-workspace retrieval."""
+    return bool(
+        web_search_enabled
+        or url_access_enabled
+        or source_review_enabled
+        or deep_research_enabled
+    )
+
+
+def _should_auto_merge_chat_upload_workspace_context(
+    explicit_external_retrieval_requested,
+    hybrid_search_enabled,
+    assigned_knowledge_filters=None,
+    assigned_knowledge_user_context_active=False,
+):
+    """Avoid auto-linking chat uploads into explicit Web, URL Access, or Deep Research turns."""
+    if not explicit_external_retrieval_requested:
+        return True
+    if hybrid_search_enabled:
+        return True
+    if assigned_knowledge_user_context_active:
+        return True
+    return bool(
+        assigned_knowledge_filters
+        and assigned_knowledge_filters.get('has_workspace_knowledge')
+    )
 
 
 def _build_agent_selection_metadata(agent_info, assigned_knowledge_filters=None):
@@ -5397,7 +5485,7 @@ class ActiveConversationStreamSession:
         metadata['event_count'] = _safe_int(metadata.get('event_count')) + 1
         metadata['last_event_at'] = _utcnow_iso()
 
-        content_value = payload.get('content') if isinstance(payload, dict) else None
+        content_value = payload.get('content') if isinstance(payload, dict) and payload.get('type') != 'thought' else None
         first_content_emitted = False
         if content_value:
             metadata['content_event_count'] = _safe_int(metadata.get('content_event_count')) + 1
@@ -10544,62 +10632,14 @@ def get_foundry_api_version_candidates(primary_version, settings):
 
 def build_streaming_multi_endpoint_client(auth_settings, provider, endpoint, api_version, deployment_name=''):
     """Create an inference client for a resolved streaming model endpoint."""
-    auth_settings = auth_settings or {}
-    auth_type = str(auth_settings.get('type') or 'managed_identity').lower()
-    normalized_provider = str(provider or 'aoai').lower()
-    runtime_protocol = infer_model_endpoint_protocol(normalized_provider, endpoint, deployment_name)
-
-    if auth_type in ('api_key', 'key'):
-        api_key = auth_settings.get('api_key')
-        if not api_key:
-            raise ValueError('Selected model endpoint is missing an API key.')
-        if runtime_protocol == MODEL_ENDPOINT_PROTOCOL_ANTHROPIC:
-            return build_anthropic_chat_client(endpoint=endpoint, api_key=api_key)
-        if runtime_protocol == MODEL_ENDPOINT_PROTOCOL_OPENAI_STYLE:
-            return build_openai_style_chat_client(api_key, endpoint, api_version)
-        return AzureOpenAI(
-            api_version=api_version,
-            azure_endpoint=endpoint,
-            api_key=api_key,
-        )
-
-    if auth_type == 'service_principal':
-        credential = ClientSecretCredential(
-            tenant_id=auth_settings.get('tenant_id'),
-            client_id=auth_settings.get('client_id'),
-            client_secret=auth_settings.get('client_secret'),
-            authority=resolve_authority(auth_settings),
-        )
-    else:
-        managed_identity_client_id = auth_settings.get('managed_identity_client_id') or None
-        credential = DefaultAzureCredential(managed_identity_client_id=managed_identity_client_id)
-
-    scope = cognitive_services_scope
-    if normalized_provider in ('aifoundry', 'new_foundry') or runtime_protocol != MODEL_ENDPOINT_PROTOCOL_AZURE_OPENAI:
-        scope = resolve_foundry_scope_for_auth(auth_settings, endpoint=endpoint)
-        if auth_type == 'service_principal':
-            debug_print(
-                f"[Streaming][Model Resolution] Multi-endpoint SP scope={scope} provider={normalized_provider} protocol={runtime_protocol}"
-            )
-        else:
-            debug_print(
-                f"[Streaming][Model Resolution] Multi-endpoint MI scope={scope} provider={normalized_provider} protocol={runtime_protocol}"
-            )
-
-    if runtime_protocol == MODEL_ENDPOINT_PROTOCOL_ANTHROPIC:
-        token = credential.get_token(scope).token
-        return build_anthropic_chat_client(endpoint=endpoint, bearer_token=token)
-
-    if runtime_protocol == MODEL_ENDPOINT_PROTOCOL_OPENAI_STYLE:
-        token = credential.get_token(scope).token
-        return build_openai_style_chat_client(token, endpoint, api_version)
-
-    token_provider = get_bearer_token_provider(credential, scope)
-    return AzureOpenAI(
-        api_version=api_version,
-        azure_endpoint=endpoint,
-        azure_ad_token_provider=token_provider,
+    client, _ = build_model_endpoint_sync_chat_client(
+        auth_settings,
+        provider,
+        endpoint,
+        api_version,
+        deployment_name=deployment_name,
     )
+    return client
 
 
 def get_streaming_model_endpoint_candidates(settings, user_id, active_group_ids=None):
@@ -11012,6 +11052,7 @@ def register_route_backend_chats(app):
         agent_id: str = None,
         enabled: bool = True,
         include_metadata: bool = False,
+        inject_context: bool = True,
     ):
         prompt_payload = build_fact_memory_prompt_payload(
             scope_id=scope_id,
@@ -11022,8 +11063,22 @@ def register_route_backend_chats(app):
             enabled=enabled,
             include_metadata=include_metadata,
         )
-        for message in reversed(prompt_payload.get('context_messages', [])):
-            conversation_history.insert(0, message)
+        if inject_context == 'fold_latest_user':
+            if _fold_fact_memory_notes_into_latest_user_message(conversation_history, prompt_payload):
+                debug_print(
+                    "[Fact Memory] Folded memory context into latest user message for selected model/provider."
+                )
+            elif prompt_payload.get('context_messages'):
+                debug_print(
+                    "[Fact Memory] Retrieved memory context but could not fold it into the latest user message."
+                )
+        elif inject_context:
+            for message in reversed(prompt_payload.get('context_messages', [])):
+                conversation_history.insert(0, message)
+        elif prompt_payload.get('context_messages'):
+            debug_print(
+                "[Fact Memory] Retrieved memory context but skipped model injection for selected model/provider."
+            )
         return prompt_payload
 
     def normalize_terminal_chat_payload(payload):
@@ -12642,6 +12697,12 @@ def register_route_backend_chats(app):
             deep_research_requested = bool(source_review_enabled) or bool(deep_research_enabled)
             deep_research_enabled = source_review_allowed_for_user and deep_research_requested
             source_review_enabled = bool(deep_research_enabled or url_access_enabled)
+            explicit_external_retrieval_requested = _is_explicit_external_retrieval_requested(
+                web_search_enabled=web_search_enabled,
+                url_access_enabled=url_access_enabled,
+                source_review_enabled=source_review_enabled,
+                deep_research_enabled=deep_research_enabled,
+            )
 
             history_grounded_search_used = False
             history_only_answerability = None
@@ -12723,6 +12784,13 @@ def register_route_backend_chats(app):
                         deep_research_enabled = True
                 g.assigned_knowledge_context = assigned_knowledge_filters
                 g.assigned_knowledge_user_context_active = assigned_knowledge_user_context_active
+
+            explicit_external_retrieval_requested = _is_explicit_external_retrieval_requested(
+                web_search_enabled=web_search_enabled,
+                url_access_enabled=url_access_enabled,
+                source_review_enabled=source_review_enabled,
+                deep_research_enabled=deep_research_enabled,
+            )
 
             original_hybrid_search_enabled = bool(hybrid_search_enabled)
 
@@ -12887,15 +12955,29 @@ def register_route_backend_chats(app):
             _set_authorized_chat_request_context(user_id, conversation_id, scope_context)
 
             auto_linked_chat_upload_document_ids = []
-            chat_upload_context = _resolve_chat_upload_workspace_context(
-                user_id=user_id,
-                conversation_id=conversation_id,
-                effective_document_scope=effective_document_scope,
-                effective_selected_document_ids=effective_selected_document_ids,
+            auto_merge_chat_upload_workspace_context = _should_auto_merge_chat_upload_workspace_context(
+                explicit_external_retrieval_requested,
+                hybrid_search_enabled,
                 assigned_knowledge_filters=assigned_knowledge_filters,
                 assigned_knowledge_user_context_active=assigned_knowledge_user_context_active,
-                candidate_document_ids=data.get('conversation_task_document_ids'),
             )
+            if auto_merge_chat_upload_workspace_context:
+                chat_upload_context = _resolve_chat_upload_workspace_context(
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    effective_document_scope=effective_document_scope,
+                    effective_selected_document_ids=effective_selected_document_ids,
+                    assigned_knowledge_filters=assigned_knowledge_filters,
+                    assigned_knowledge_user_context_active=assigned_knowledge_user_context_active,
+                    candidate_document_ids=data.get('conversation_task_document_ids'),
+                )
+            else:
+                chat_upload_context = {
+                    'effective_document_scope': effective_document_scope,
+                    'effective_selected_document_ids': list(effective_selected_document_ids or []),
+                    'auto_linked_chat_upload_document_ids': [],
+                    'task_resolution': {},
+                }
             task_resolution = chat_upload_context.get('task_resolution') or {}
             if task_resolution.get('blocked') and task_resolution.get('linked_count'):
                 return jsonify({'error': 'This agent does not allow uploaded task documents for search.'}), 403
@@ -13389,7 +13471,7 @@ def register_route_backend_chats(app):
                 except Exception as ex:
                     debug_print(f"[Content Safety] Unexpected error: {ex}")
 
-            if not original_hybrid_search_enabled:
+            if not original_hybrid_search_enabled and not explicit_external_retrieval_requested:
                 prior_grounded_document_refs = _normalize_prior_grounded_document_refs(conversation_item)
                 if prior_grounded_document_refs:
                     thought_tracker.add_thought(
@@ -14509,6 +14591,7 @@ def register_route_backend_chats(app):
                     gpt_model=gpt_model,
                     user_message_id=user_message_id,
                     fallback_user_message=user_message,
+                    include_assistant_citation_context=not explicit_external_retrieval_requested,
                 )
                 summary_of_older = history_segments['summary_of_older']
                 chat_tabular_files = history_segments['chat_tabular_files']
@@ -14747,6 +14830,7 @@ def register_route_backend_chats(app):
             if should_apply_history_grounding_message(
                 original_hybrid_search_enabled,
                 prior_grounded_document_refs,
+                explicit_external_retrieval_requested,
             ):
                 history_grounding_message = build_history_grounding_system_message()
                 insert_idx = 0
@@ -14945,6 +15029,11 @@ def register_route_backend_chats(app):
                 agent_id=None,
                 enabled=fact_memory_enabled,
                 include_metadata=bool(enable_semantic_kernel and user_enable_agents),
+                inject_context=(
+                    True
+                    if _should_inject_fact_memory_context_for_model(gpt_provider, gpt_model)
+                    else 'fold_latest_user'
+                ),
             )
             for thought in fact_memory_payload.get('thoughts', []):
                 thought_tracker.add_thought(
@@ -15401,16 +15490,21 @@ def register_route_backend_chats(app):
                     'messages': conversation_history_for_api,
                 }
 
-                # Add reasoning_effort if provided and not 'none'
-                if reasoning_effort and reasoning_effort != 'none':
-                    api_params['reasoning_effort'] = reasoning_effort
-                    debug_print(f"Using reasoning effort: {reasoning_effort}")
+                request_reasoning_effort = _resolve_reasoning_effort_for_model(
+                    reasoning_effort,
+                    gpt_model,
+                    provider=gpt_provider,
+                    endpoint=gpt_endpoint,
+                )
+                if request_reasoning_effort:
+                    api_params['reasoning_effort'] = request_reasoning_effort
+                    debug_print(f"Using reasoning effort: {request_reasoning_effort}")
 
                 try:
                     response = gpt_client.chat.completions.create(**api_params)
                 except Exception as e:
                     error_str = str(e).lower()
-                    if reasoning_effort and reasoning_effort != 'none' and (
+                    if request_reasoning_effort and (
                         'reasoning_effort' in error_str or
                         'unrecognized request argument' in error_str or
                         'invalid_request_error' in error_str
@@ -16249,6 +16343,12 @@ def register_route_backend_chats(app):
                 deep_research_requested = bool(source_review_enabled) or bool(deep_research_enabled)
                 deep_research_enabled = source_review_allowed_for_user and deep_research_requested
                 source_review_enabled = bool(deep_research_enabled or url_access_enabled)
+                explicit_external_retrieval_requested = _is_explicit_external_retrieval_requested(
+                    web_search_enabled=web_search_enabled,
+                    url_access_enabled=url_access_enabled,
+                    source_review_enabled=source_review_enabled,
+                    deep_research_enabled=deep_research_enabled,
+                )
                 original_hybrid_search_enabled = bool(hybrid_search_enabled)
                 history_grounded_search_used = False
                 history_only_answerability = None
@@ -16336,6 +16436,12 @@ def register_route_backend_chats(app):
                         f"public_workspaces={len(effective_active_public_workspace_ids)} | "
                         f"tags={len(tags_filter)}"
                     )
+                explicit_external_retrieval_requested = _is_explicit_external_retrieval_requested(
+                    web_search_enabled=web_search_enabled,
+                    url_access_enabled=url_access_enabled,
+                    source_review_enabled=source_review_enabled,
+                    deep_research_enabled=deep_research_enabled,
+                )
                 debug_print(
                     "[Streaming] Normalized toggles | "
                     f"hybrid_search={hybrid_search_enabled} | "
@@ -16515,15 +16621,29 @@ def register_route_backend_chats(app):
                         return
 
                 auto_linked_chat_upload_document_ids = []
-                chat_upload_context = _resolve_chat_upload_workspace_context(
-                    user_id=user_id,
-                    conversation_id=conversation_id,
-                    effective_document_scope=effective_document_scope,
-                    effective_selected_document_ids=effective_selected_document_ids,
+                auto_merge_chat_upload_workspace_context = _should_auto_merge_chat_upload_workspace_context(
+                    explicit_external_retrieval_requested,
+                    hybrid_search_enabled,
                     assigned_knowledge_filters=assigned_knowledge_filters,
                     assigned_knowledge_user_context_active=assigned_knowledge_user_context_active,
-                    candidate_document_ids=data.get('conversation_task_document_ids'),
                 )
+                if auto_merge_chat_upload_workspace_context:
+                    chat_upload_context = _resolve_chat_upload_workspace_context(
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        effective_document_scope=effective_document_scope,
+                        effective_selected_document_ids=effective_selected_document_ids,
+                        assigned_knowledge_filters=assigned_knowledge_filters,
+                        assigned_knowledge_user_context_active=assigned_knowledge_user_context_active,
+                        candidate_document_ids=data.get('conversation_task_document_ids'),
+                    )
+                else:
+                    chat_upload_context = {
+                        'effective_document_scope': effective_document_scope,
+                        'effective_selected_document_ids': list(effective_selected_document_ids or []),
+                        'auto_linked_chat_upload_document_ids': [],
+                        'task_resolution': {},
+                    }
                 task_resolution = chat_upload_context.get('task_resolution') or {}
                 if task_resolution.get('blocked') and task_resolution.get('linked_count'):
                     yield f"data: {json.dumps({'error': 'This agent does not allow uploaded task documents for search.'})}\n\n"
@@ -16984,7 +17104,7 @@ def register_route_backend_chats(app):
                     except Exception as ex:
                         debug_print(f"[Content Safety - Streaming] Unexpected error: {ex}")
 
-                if not original_hybrid_search_enabled:
+                if not original_hybrid_search_enabled and not explicit_external_retrieval_requested:
                     prior_grounded_document_refs = _normalize_prior_grounded_document_refs(conversation_item)
                     if prior_grounded_document_refs:
                         yield emit_thought(
@@ -17756,6 +17876,7 @@ def register_route_backend_chats(app):
                         gpt_model=gpt_model,
                         user_message_id=user_message_id,
                         fallback_user_message=user_message,
+                        include_assistant_citation_context=not explicit_external_retrieval_requested,
                     )
                     summary_of_older = history_segments['summary_of_older']
                     chat_tabular_files = history_segments['chat_tabular_files']
@@ -17953,6 +18074,7 @@ def register_route_backend_chats(app):
                 if should_apply_history_grounding_message(
                     original_hybrid_search_enabled,
                     prior_grounded_document_refs,
+                    explicit_external_retrieval_requested,
                 ):
                     history_grounding_message = build_history_grounding_system_message()
                     insert_idx = 0
@@ -17998,6 +18120,11 @@ def register_route_backend_chats(app):
                     agent_id=None,
                     enabled=fact_memory_enabled,
                     include_metadata=bool(enable_semantic_kernel and user_enable_agents),
+                    inject_context=(
+                        True
+                        if _should_inject_fact_memory_context_for_model(gpt_provider, gpt_model)
+                        else 'fold_latest_user'
+                    ),
                 )
                 for thought in fact_memory_payload.get('thoughts', []):
                     yield emit_thought(
@@ -18540,10 +18667,15 @@ def register_route_backend_chats(app):
                             'stream_options': {'include_usage': True}  # Request token usage in final chunk
                         }
 
-                        # Add reasoning_effort if provided and not 'none'
-                        if reasoning_effort and reasoning_effort != 'none':
-                            stream_params['reasoning_effort'] = reasoning_effort
-                            debug_print(f"Using reasoning effort: {reasoning_effort}")
+                        request_reasoning_effort = _resolve_reasoning_effort_for_model(
+                            reasoning_effort,
+                            gpt_model,
+                            provider=gpt_provider,
+                            endpoint=gpt_endpoint,
+                        )
+                        if request_reasoning_effort:
+                            stream_params['reasoning_effort'] = request_reasoning_effort
+                            debug_print(f"Using reasoning effort: {request_reasoning_effort}")
 
                         final_model_used = gpt_model
 
@@ -18552,7 +18684,7 @@ def register_route_backend_chats(app):
                         except Exception as e:
                             # Check if error is related to reasoning_effort parameter
                             error_str = str(e).lower()
-                            if reasoning_effort and reasoning_effort != 'none' and (
+                            if request_reasoning_effort and (
                                 'reasoning_effort' in error_str or
                                 'unrecognized request argument' in error_str or
                                 'invalid_request_error' in error_str
@@ -18571,9 +18703,10 @@ def register_route_backend_chats(app):
 
                             if chunk.choices and len(chunk.choices) > 0:
                                 delta = chunk.choices[0].delta
-                                if delta.content:
-                                    accumulated_content += delta.content
-                                    yield f"data: {json.dumps({'content': delta.content})}\n\n"
+                                chunk_content = normalize_chat_completion_text(getattr(delta, 'content', None))
+                                if chunk_content:
+                                    accumulated_content += chunk_content
+                                    yield f"data: {json.dumps({'content': chunk_content})}\n\n"
 
                             if stream_cancel_requested():
                                 yield finalize_cancelled_stream_response()
@@ -18588,6 +18721,59 @@ def register_route_backend_chats(app):
                                     'captured_at': datetime.utcnow().isoformat()
                                 }
                                 debug_print(f"[Streaming Tokens] Captured usage - prompt: {chunk.usage.prompt_tokens}, completion: {chunk.usage.completion_tokens}, total: {chunk.usage.total_tokens}")
+
+                        if not accumulated_content:
+                            debug_print(
+                                f"[Streaming] Model stream returned no assistant content for {gpt_model}; retrying without streaming."
+                            )
+                            log_event(
+                                "[Streaming] Model stream returned no assistant content; retrying without streaming",
+                                extra={
+                                    "conversation_id": conversation_id,
+                                    "user_id": user_id,
+                                    "model": gpt_model,
+                                    "provider": gpt_provider,
+                                    "endpoint_id": gpt_endpoint_id,
+                                    "api_version": gpt_api_version,
+                                },
+                                level=logging.WARNING,
+                            )
+                            fallback_params = {
+                                key: value
+                                for key, value in stream_params.items()
+                                if key not in {'stream', 'stream_options'}
+                            }
+                            fallback_params.pop('reasoning_effort', None)
+                            try:
+                                fallback_response = gpt_client.chat.completions.create(**fallback_params)
+                            except Exception as fallback_error:
+                                fallback_error_str = str(fallback_error).lower()
+                                if request_reasoning_effort and (
+                                    'reasoning_effort' in fallback_error_str or
+                                    'unrecognized request argument' in fallback_error_str or
+                                    'invalid_request_error' in fallback_error_str
+                                ):
+                                    debug_print(f"Reasoning effort not supported by {gpt_model} in non-streaming retry; retrying without reasoning_effort...")
+                                    fallback_params.pop('reasoning_effort', None)
+                                    fallback_response = gpt_client.chat.completions.create(**fallback_params)
+                                else:
+                                    raise
+
+                            fallback_content = extract_chat_completion_response_text(fallback_response)
+                            if fallback_content:
+                                accumulated_content += fallback_content
+                                yield f"data: {json.dumps({'content': fallback_content})}\n\n"
+                                if hasattr(fallback_response, 'usage') and fallback_response.usage:
+                                    token_usage_data = {
+                                        'prompt_tokens': fallback_response.usage.prompt_tokens,
+                                        'completion_tokens': fallback_response.usage.completion_tokens,
+                                        'total_tokens': fallback_response.usage.total_tokens,
+                                        'captured_at': datetime.utcnow().isoformat()
+                                    }
+                            else:
+                                raise RuntimeError(
+                                    "The selected model returned an empty response. Check the model endpoint API version and provider compatibility, then use Test Model before trying again."
+                                )
 
                         # Emit responded thought for regular LLM streaming
                         gpt_stream_total_duration_s = round(time.time() - request_start_time, 1)
@@ -19738,9 +19924,14 @@ def build_history_grounding_system_message():
 def should_apply_history_grounding_message(
     original_hybrid_search_enabled,
     prior_grounded_document_refs,
+    explicit_external_retrieval_requested=False,
 ):
     """Apply bounded grounding only when prior grounded docs exist for this conversation."""
-    return (not bool(original_hybrid_search_enabled)) and bool(prior_grounded_document_refs)
+    return (
+        not bool(original_hybrid_search_enabled)
+        and not bool(explicit_external_retrieval_requested)
+        and bool(prior_grounded_document_refs)
+    )
 
 
 def build_assistant_history_content_with_citations(message, content):
@@ -19885,6 +20076,7 @@ def build_conversation_history_segments(
     gpt_model=None,
     user_message_id=None,
     fallback_user_message="",
+    include_assistant_citation_context=True,
 ):
     """Build shared conversation history segments for chat completions."""
     conversation_history_messages = []
@@ -19936,7 +20128,7 @@ def build_conversation_history_segments(
                 continue
 
             content = message.get('content', '')
-            if role == 'assistant':
+            if role == 'assistant' and include_assistant_citation_context:
                 content = build_assistant_history_content_with_citations(message, content)
             message_texts_older.append(f"{role.upper()}: {content}")
             summarized_message_refs.append(_format_history_message_ref(message))
@@ -19996,7 +20188,7 @@ def build_conversation_history_segments(
             debug_print(f"[MASK] Applied {len(masked_ranges)} masked ranges to message {message.get('id')}")
 
         if role in allowed_roles_in_history:
-            if role == 'assistant':
+            if role == 'assistant' and include_assistant_citation_context:
                 content = build_assistant_history_content_with_citations(message, content)
             conversation_history_messages.append({"role": role, "content": content})
             history_message_source_refs.append(_format_history_message_ref(message))
