@@ -30,6 +30,8 @@ const ACTIVITY_LOGS_LAYOUT_HINTS = {
     'details-focus': 'Details Focus widens the Details column for longer entries. Click a row for the full raw log.',
     compact: 'Compact view prioritizes faster scanning. Click a row for the full raw log when details are truncated.'
 };
+const CONTROL_CENTER_MANAGEMENT_DEFAULT_PAGE_SIZE = 25;
+const CONTROL_CENTER_MANAGEMENT_MAX_PAGE_SIZE = 250;
 
 // Group Table Sorter - similar to user table but for groups
 class GroupTableSorter {
@@ -79,8 +81,8 @@ class GroupTableSorter {
             let bValue = this.getCellValue(b, sortKey);
 
             // Handle different data types
-            if (sortKey === 'members' || sortKey === 'documents') {
-                // Numeric sorting for numbers and dates
+            if (sortKey === 'members' || sortKey === 'documents' || sortKey === 'tokens') {
+                // Numeric sorting for counts and totals
                 aValue = this.parseNumericValue(aValue);
                 bValue = this.parseNumericValue(bValue);
                 
@@ -138,6 +140,9 @@ class GroupTableSorter {
                 const docMatch = docText.match(/(\d+)/);
                 value = docMatch ? docMatch[1] : '0';
                 break;
+            case 'tokens':
+                value = cell.textContent.trim();
+                break;
             default:
                 value = cell.textContent.trim();
         }
@@ -158,18 +163,27 @@ class GroupTableSorter {
     parseNumericValue(value) {
         if (!value || value === '' || value.toLowerCase() === 'never') return 0;
         
-        // Extract numeric value from string
-        const numMatch = value.match(/(\d+)/);
-        return numMatch ? parseInt(numMatch[1]) : 0;
+        // Extract numeric value from strings that may contain comma group separators.
+        const normalizedValue = value.replace(/,/g, '');
+        const numMatch = normalizedValue.match(/(\d+(?:\.\d+)?)/);
+        return numMatch ? Number.parseFloat(numMatch[1]) : 0;
     }
 }
 
 class ControlCenter {
     constructor() {
         this.currentPage = 1;
-        this.usersPerPage = 50;
+        this.usersPerPage = CONTROL_CENTER_MANAGEMENT_DEFAULT_PAGE_SIZE;
         this.searchTerm = '';
         this.accessFilter = 'all';
+        this.groupPage = 1;
+        this.groupsPerPage = CONTROL_CENTER_MANAGEMENT_DEFAULT_PAGE_SIZE;
+        this.groupSearchTerm = '';
+        this.groupStatusFilter = 'all';
+        this.publicWorkspacePage = 1;
+        this.publicWorkspacesPerPage = CONTROL_CENTER_MANAGEMENT_DEFAULT_PAGE_SIZE;
+        this.publicWorkspaceSearchTerm = '';
+        this.publicWorkspaceStatusFilter = 'all';
         this.selectedUsers = new Set();
         this.selectedGroups = new Set();
         this.selectedPublicWorkspaces = new Set();
@@ -241,12 +255,18 @@ class ControlCenter {
             this.debounce(() => this.handleSearchChange(), 300));
         document.getElementById('accessFilterSelect')?.addEventListener('change', 
             () => this.handleFilterChange());
+        document.getElementById('userManagementPerPageSelect')?.addEventListener('change',
+            (e) => this.handleUserPerPageChange(e));
+        document.getElementById('groupManagementPerPageSelect')?.addEventListener('change',
+            (e) => this.handleGroupPerPageChange(e));
         
         // Public workspace search and filter controls
         document.getElementById('publicWorkspaceSearchInput')?.addEventListener('input', 
-            this.debounce((e) => this.searchPublicWorkspaces(e.target.value), 300));
+            this.debounce(() => this.handlePublicWorkspaceSearchChange(), 300));
         document.getElementById('publicWorkspaceStatusFilterSelect')?.addEventListener('change', 
-            (e) => this.filterPublicWorkspacesByStatus(e.target.value));
+            () => this.handlePublicWorkspaceFilterChange());
+        document.getElementById('publicWorkspaceManagementPerPageSelect')?.addEventListener('change',
+            (e) => this.handlePublicWorkspacePerPageChange(e));
         
         // Export buttons
         document.getElementById('exportGroupsBtn')?.addEventListener('click', 
@@ -397,6 +417,7 @@ class ControlCenter {
             const data = await response.json();
             
             if (response.ok) {
+                this.currentPage = Number(data.pagination?.page || this.currentPage);
                 this.renderUsers(data.users);
                 this.renderPagination(data.pagination);
             } else {
@@ -614,77 +635,154 @@ class ControlCenter {
     }
     
     renderPagination(pagination) {
-        const paginationInfo = document.getElementById('usersPaginationInfo');
-        const paginationNav = document.getElementById('usersPagination');
-        
+        this.renderManagementPagination(pagination, {
+            infoId: 'usersPaginationInfo',
+            paginationId: 'usersPagination',
+            itemLabel: 'users',
+            onPageSelected: (page) => this.goToPage(page)
+        });
+    }
+
+    renderGroupsPagination(pagination) {
+        this.renderManagementPagination(pagination, {
+            infoId: 'groupsPaginationInfo',
+            paginationId: 'groupsPagination',
+            itemLabel: 'groups',
+            onPageSelected: (page) => this.goToGroupsPage(page)
+        });
+    }
+
+    renderPublicWorkspacesPagination(pagination) {
+        const totalItems = Number(pagination?.total_items ?? pagination?.total_count ?? 0);
+        const publicWorkspaceCount = document.getElementById('publicWorkspaceCount');
+        if (publicWorkspaceCount) {
+            publicWorkspaceCount.textContent = `${totalItems.toLocaleString()} public workspace${totalItems === 1 ? '' : 's'}`;
+        }
+
+        this.renderManagementPagination(pagination, {
+            infoId: 'publicWorkspacesPaginationInfo',
+            paginationId: 'publicWorkspacesPagination',
+            itemLabel: 'public workspaces',
+            onPageSelected: (page) => this.goToPublicWorkspacesPage(page)
+        });
+    }
+
+    renderManagementPagination(pagination, options) {
+        const paginationInfo = document.getElementById(options.infoId);
+        const paginationNav = document.getElementById(options.paginationId);
+        const totalItems = Number(pagination?.total_items ?? pagination?.total_count ?? 0);
+        const perPage = Math.max(Number(pagination?.per_page ?? CONTROL_CENTER_MANAGEMENT_DEFAULT_PAGE_SIZE), 1);
+        const totalPages = Math.max(Number(pagination?.total_pages ?? 1), 1);
+        const currentPage = Math.min(Math.max(Number(pagination?.page ?? 1), 1), totalPages);
+
         if (paginationInfo) {
-            const start = (pagination.page - 1) * pagination.per_page + 1;
-            const end = Math.min(pagination.page * pagination.per_page, pagination.total_items);
-            paginationInfo.textContent = `Showing ${start}-${end} of ${pagination.total_items} users`;
+            const start = totalItems === 0 ? 0 : ((currentPage - 1) * perPage) + 1;
+            const end = totalItems === 0 ? 0 : Math.min(currentPage * perPage, totalItems);
+            paginationInfo.textContent = `Showing ${start}-${end} of ${totalItems} ${options.itemLabel}`;
         }
-        
-        if (paginationNav) {
-            let paginationHtml = '';
-            
-            // Previous button
-            paginationHtml += `
-                <li class="page-item ${!pagination.has_prev ? 'disabled' : ''}">
-                    <a class="page-link" href="#" onclick="controlCenter.goToPage(${pagination.page - 1}); return false;">
-                        <i class="bi bi-chevron-left"></i>
-                    </a>
-                </li>
-            `;
-            
-            // Page numbers
-            const startPage = Math.max(1, pagination.page - 2);
-            const endPage = Math.min(pagination.total_pages, pagination.page + 2);
-            
-            if (startPage > 1) {
-                paginationHtml += `
-                    <li class="page-item">
-                        <a class="page-link" href="#" onclick="controlCenter.goToPage(1); return false;">1</a>
-                    </li>
-                `;
-                if (startPage > 2) {
-                    paginationHtml += '<li class="page-item disabled"><span class="page-link">...</span></li>';
-                }
-            }
-            
-            for (let i = startPage; i <= endPage; i++) {
-                paginationHtml += `
-                    <li class="page-item ${i === pagination.page ? 'active' : ''}">
-                        <a class="page-link" href="#" onclick="controlCenter.goToPage(${i}); return false;">${i}</a>
-                    </li>
-                `;
-            }
-            
-            if (endPage < pagination.total_pages) {
-                if (endPage < pagination.total_pages - 1) {
-                    paginationHtml += '<li class="page-item disabled"><span class="page-link">...</span></li>';
-                }
-                paginationHtml += `
-                    <li class="page-item">
-                        <a class="page-link" href="#" onclick="controlCenter.goToPage(${pagination.total_pages}); return false;">${pagination.total_pages}</a>
-                    </li>
-                `;
-            }
-            
-            // Next button
-            paginationHtml += `
-                <li class="page-item ${!pagination.has_next ? 'disabled' : ''}">
-                    <a class="page-link" href="#" onclick="controlCenter.goToPage(${pagination.page + 1}); return false;">
-                        <i class="bi bi-chevron-right"></i>
-                    </a>
-                </li>
-            `;
-            
-            paginationNav.innerHTML = paginationHtml;
+
+        if (!paginationNav) {
+            return;
         }
+
+        paginationNav.replaceChildren();
+
+        const appendPageButton = ({ label, page, disabled = false, active = false, iconClass = null, ariaLabel = null }) => {
+            const item = document.createElement('li');
+            item.className = `page-item${disabled ? ' disabled' : ''}${active ? ' active' : ''}`;
+
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'page-link';
+            button.disabled = disabled;
+            if (ariaLabel) {
+                button.setAttribute('aria-label', ariaLabel);
+            }
+            if (active) {
+                button.setAttribute('aria-current', 'page');
+            }
+
+            if (iconClass) {
+                const icon = document.createElement('i');
+                icon.className = iconClass;
+                button.appendChild(icon);
+            } else {
+                button.textContent = label;
+            }
+
+            if (!disabled && !active) {
+                button.addEventListener('click', () => options.onPageSelected(page));
+            }
+
+            item.appendChild(button);
+            paginationNav.appendChild(item);
+        };
+
+        const appendEllipsis = () => {
+            const item = document.createElement('li');
+            item.className = 'page-item disabled';
+            const span = document.createElement('span');
+            span.className = 'page-link';
+            span.textContent = '...';
+            item.appendChild(span);
+            paginationNav.appendChild(item);
+        };
+
+        appendPageButton({
+            label: 'Previous',
+            page: currentPage - 1,
+            disabled: currentPage <= 1,
+            iconClass: 'bi bi-chevron-left',
+            ariaLabel: 'Previous page'
+        });
+
+        const startPage = Math.max(1, currentPage - 2);
+        const endPage = Math.min(totalPages, currentPage + 2);
+
+        if (startPage > 1) {
+            appendPageButton({ label: '1', page: 1 });
+            if (startPage > 2) {
+                appendEllipsis();
+            }
+        }
+
+        for (let page = startPage; page <= endPage; page += 1) {
+            appendPageButton({
+                label: String(page),
+                page,
+                active: page === currentPage
+            });
+        }
+
+        if (endPage < totalPages) {
+            if (endPage < totalPages - 1) {
+                appendEllipsis();
+            }
+            appendPageButton({ label: String(totalPages), page: totalPages });
+        }
+
+        appendPageButton({
+            label: 'Next',
+            page: currentPage + 1,
+            disabled: currentPage >= totalPages,
+            iconClass: 'bi bi-chevron-right',
+            ariaLabel: 'Next page'
+        });
     }
     
     goToPage(page) {
         this.currentPage = page;
         this.loadUsers();
+    }
+
+    goToGroupsPage(page) {
+        this.groupPage = page;
+        this.loadGroups();
+    }
+
+    goToPublicWorkspacesPage(page) {
+        this.publicWorkspacePage = page;
+        this.loadPublicWorkspaces();
     }
     
     handleSearchChange() {
@@ -698,6 +796,58 @@ class ControlCenter {
         this.currentPage = 1;
         this.loadUsers();
     }
+
+    handleUserPerPageChange(event) {
+        this.usersPerPage = this.getManagementPageSize(event.target.value, this.usersPerPage);
+        this.currentPage = 1;
+        this.loadUsers();
+    }
+
+    handleGroupSearchChange() {
+        this.groupSearchTerm = document.getElementById('groupSearchInput')?.value || '';
+        this.groupPage = 1;
+        clearTimeout(this.groupSearchTimeout);
+        this.groupSearchTimeout = setTimeout(() => this.loadGroups(), 300);
+    }
+
+    handleGroupFilterChange() {
+        this.groupStatusFilter = document.getElementById('groupStatusFilterSelect')?.value || 'all';
+        this.groupPage = 1;
+        this.loadGroups();
+    }
+
+    handleGroupPerPageChange(event) {
+        this.groupsPerPage = this.getManagementPageSize(event.target.value, this.groupsPerPage);
+        this.groupPage = 1;
+        this.loadGroups();
+    }
+
+    handlePublicWorkspaceSearchChange() {
+        this.publicWorkspaceSearchTerm = document.getElementById('publicWorkspaceSearchInput')?.value || '';
+        this.publicWorkspacePage = 1;
+        this.loadPublicWorkspaces();
+    }
+
+    handlePublicWorkspaceFilterChange() {
+        this.publicWorkspaceStatusFilter = document.getElementById('publicWorkspaceStatusFilterSelect')?.value || 'all';
+        this.publicWorkspacePage = 1;
+        this.loadPublicWorkspaces();
+    }
+
+    handlePublicWorkspacePerPageChange(event) {
+        this.publicWorkspacesPerPage = this.getManagementPageSize(event.target.value, this.publicWorkspacesPerPage);
+        this.publicWorkspacePage = 1;
+        this.loadPublicWorkspaces();
+    }
+
+    getManagementPageSize(value, fallback) {
+        const pageSize = Number.parseInt(value, 10);
+        if (!Number.isInteger(pageSize) || pageSize < 1) {
+            return fallback || CONTROL_CENTER_MANAGEMENT_DEFAULT_PAGE_SIZE;
+        }
+
+        return Math.min(pageSize, CONTROL_CENTER_MANAGEMENT_MAX_PAGE_SIZE);
+    }
     
     handleSelectAll(e) {
         const checkboxes = document.querySelectorAll('.user-checkbox');
@@ -710,6 +860,52 @@ class ControlCenter {
             }
         });
         this.updateBulkActionButton();
+    }
+
+    handleSelectAllGroups(e) {
+        const checkboxes = document.querySelectorAll('.group-checkbox');
+        checkboxes.forEach(checkbox => {
+            checkbox.checked = e.target.checked;
+            if (e.target.checked) {
+                this.selectedGroups.add(checkbox.value);
+            } else {
+                this.selectedGroups.delete(checkbox.value);
+            }
+        });
+        this.updateGroupBulkActionButton();
+    }
+
+    handleSelectAllPublicWorkspaces(e) {
+        const checkboxes = document.querySelectorAll('.public-workspace-checkbox');
+        checkboxes.forEach(checkbox => {
+            checkbox.checked = e.target.checked;
+            if (e.target.checked) {
+                this.selectedPublicWorkspaces.add(checkbox.value);
+            } else {
+                this.selectedPublicWorkspaces.delete(checkbox.value);
+            }
+        });
+        this.updatePublicWorkspaceBulkActionButton();
+    }
+
+    updateVisibleSelectionState(checkboxSelector, selectAllId) {
+        const allCheckboxes = document.querySelectorAll(checkboxSelector);
+        const checkedCheckboxes = document.querySelectorAll(`${checkboxSelector}:checked`);
+        const selectAllCheckbox = document.getElementById(selectAllId);
+
+        if (!selectAllCheckbox) {
+            return;
+        }
+
+        if (checkedCheckboxes.length === 0) {
+            selectAllCheckbox.indeterminate = false;
+            selectAllCheckbox.checked = false;
+        } else if (checkedCheckboxes.length === allCheckboxes.length) {
+            selectAllCheckbox.indeterminate = false;
+            selectAllCheckbox.checked = true;
+        } else {
+            selectAllCheckbox.indeterminate = true;
+        }
     }
     
     handleUserSelection(e) {
@@ -752,7 +948,7 @@ class ControlCenter {
     }
     
     updatePublicWorkspaceBulkActionButton() {
-        const bulkActionBtn = document.getElementById('publicWorkspaceBulkActionBtn');
+        const bulkActionBtn = document.getElementById('bulkPublicWorkspaceActionBtn');
         if (bulkActionBtn) {
             bulkActionBtn.disabled = this.selectedPublicWorkspaces.size === 0;
         }
@@ -764,7 +960,7 @@ class ControlCenter {
     }
     
     updateGroupBulkActionButton() {
-        const bulkActionBtn = document.getElementById('groupBulkActionBtn');
+        const bulkActionBtn = document.getElementById('bulkGroupActionBtn');
         if (bulkActionBtn) {
             bulkActionBtn.disabled = this.selectedGroups.size === 0;
         }
@@ -1205,6 +1401,7 @@ class ControlCenter {
             'Member Count',
             'Status',
             'Total Documents',
+            'Token Total',
             'AI Search Size (MB)',
             'Storage Account Size (MB)',
             'Group ID'
@@ -1227,6 +1424,7 @@ class ControlCenter {
                 group.member_count || 0,
                 'Active',
                 docMetrics.total_documents || 0,
+                this.getGroupTokenTotal(group),
                 this.formatBytesForCSV(docMetrics.ai_search_size || 0),
                 this.formatBytesForCSV(docMetrics.storage_account_size || 0),
                 this.escapeCSVField(group.id || '')
@@ -2595,12 +2793,15 @@ class ControlCenter {
     formatActivityType(activityType) {
         const typeMap = {
             'user_login': 'User Login',
+            'chat_activity': 'Chat Activity',
             'conversation_creation': 'Conversation Created',
             'conversation_deletion': 'Conversation Deleted',
             'conversation_archival': 'Conversation Archived',
             'document_creation': 'Document Created',
             'document_deletion': 'Document Deleted',
             'document_metadata_update': 'Document Metadata Updated',
+            'file_sync': 'File Sync',
+            'data_management': 'Data Management',
             'token_usage': 'Token Usage',
             'group_status_change': 'Group Status Change',
             'group_member_deleted': 'Group Member Deleted',
@@ -2621,7 +2822,17 @@ class ControlCenter {
         if (!activityType) {
             return 'Unknown';
         }
-        return typeMap[activityType] || activityType.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+        return typeMap[activityType] || this.formatActivityValue(activityType);
+    }
+
+    formatActivityValue(value) {
+        if (!value) {
+            return 'N/A';
+        }
+
+        return String(value)
+            .replace(/[_-]/g, ' ')
+            .replace(/\b\w/g, letter => letter.toUpperCase());
     }
 
     formatActivityDetails(log) {
@@ -2630,6 +2841,45 @@ class ControlCenter {
         switch (activityType) {
             case 'user_login':
                 return `Login method: ${log.login_method || log.details?.login_method || 'N/A'}`;
+
+            case 'chat_activity':
+                const conversationSource = log.additional_context?.conversation_source || '';
+                const conversationSourceMap = {
+                    'document_action_chat': 'Document Action',
+                    'collaboration_chat': 'Multi-User Collaboration',
+                    'standard_chat': 'Standard Chat'
+                };
+                const messageLabel = this.formatActivityValue(log.message_type || 'message');
+                const sourceLabel = log.additional_context?.document_action_type
+                    ? this.formatActivityValue(log.additional_context.document_action_type)
+                    : (conversationSourceMap[conversationSource] || this.formatActivityValue(conversationSource));
+                const contextLabel = this.formatActivityValue(log.chat_context || log.workspace_type || '');
+                const chatSummaryParts = [messageLabel];
+                const chatMetadataParts = [];
+
+                if (sourceLabel !== 'N/A') {
+                    chatSummaryParts.push(sourceLabel);
+                }
+                if (contextLabel !== 'N/A') {
+                    chatSummaryParts.push(contextLabel);
+                }
+                if (log.conversation_id) {
+                    chatMetadataParts.push(`Conversation: ${this.escapeHtml(log.conversation_id)}`);
+                }
+                if (log.additional_context?.visibility_mode) {
+                    chatMetadataParts.push(`Visibility: ${this.escapeHtml(this.formatActivityValue(log.additional_context.visibility_mode))}`);
+                }
+                if (log.group_id) {
+                    chatMetadataParts.push(`Group: ${this.escapeHtml(log.group_id)}`);
+                }
+                if (log.public_workspace_id) {
+                    chatMetadataParts.push(`Public Workspace: ${this.escapeHtml(log.public_workspace_id)}`);
+                }
+                if (Number(log.message_length || 0) > 0) {
+                    chatMetadataParts.push(`${Number(log.message_length).toLocaleString()} chars`);
+                }
+
+                return `${chatSummaryParts.map(part => this.escapeHtml(part)).join(' · ')}${chatMetadataParts.length ? `<br><small class="text-muted">${chatMetadataParts.join(' · ')}</small>` : ''}`;
                 
             case 'conversation_creation':
                 const convTitle = log.conversation?.title || 'Untitled';
@@ -2660,6 +2910,42 @@ class ControlCenter {
                 const updatedFileName = log.document?.file_name || 'Unknown';
                 const updatedFields = Object.keys(log.updated_fields || {}).join(', ') || 'N/A';
                 return `File: ${this.escapeHtml(updatedFileName)}<br><small class="text-muted">Updated: ${updatedFields}</small>`;
+
+            case 'file_sync':
+                const fileSyncContext = log.workspace_context || {};
+                const fileSyncAdditionalContext = log.additional_context || {};
+                const fileSyncCounts = fileSyncAdditionalContext.counts || {};
+                const fileSyncAction = this.formatActivityValue(log.action || 'sync_event');
+                const fileSyncSource = fileSyncContext.source_name || fileSyncAdditionalContext.source_name || 'Unknown Source';
+                const fileSyncScope = this.formatActivityValue(fileSyncContext.scope_type || log.workspace_type || 'workspace');
+                const fileSyncDetails = [];
+                if (fileSyncAdditionalContext.run_id) {
+                    fileSyncDetails.push(`Run: ${this.escapeHtml(fileSyncAdditionalContext.run_id)}`);
+                }
+                if (this.isActivityLogValuePresent(fileSyncCounts.scanned)) {
+                    fileSyncDetails.push(`Scanned: ${this.formatActivityLogNumber(fileSyncCounts.scanned)}`);
+                }
+                if (this.isActivityLogValuePresent(fileSyncCounts.queued)) {
+                    fileSyncDetails.push(`Queued: ${this.formatActivityLogNumber(fileSyncCounts.queued)}`);
+                }
+                if (this.isActivityLogValuePresent(fileSyncCounts.failed)) {
+                    fileSyncDetails.push(`Failed: ${this.formatActivityLogNumber(fileSyncCounts.failed)}`);
+                }
+                if (fileSyncAdditionalContext.error) {
+                    fileSyncDetails.push(`Error: ${this.escapeHtml(fileSyncAdditionalContext.error)}`);
+                }
+                return `Action: ${this.escapeHtml(fileSyncAction)}<br>Source: ${this.escapeHtml(fileSyncSource)}<br><small class="text-muted">Scope: ${this.escapeHtml(fileSyncScope)}${fileSyncDetails.length ? ' · ' + fileSyncDetails.join(' · ') : ''}</small>`;
+
+            case 'data_management':
+                const dataManagementContext = log.additional_context || {};
+                const dataManagementAction = this.formatActivityValue(log.action || 'data_management_event');
+                const dataManagementJobId = dataManagementContext.job_id || log.workspace_context?.job_id || 'N/A';
+                const dataManagementStatus = this.formatActivityValue(dataManagementContext.status || 'unknown');
+                const dataManagementOperation = this.formatActivityValue(dataManagementContext.operation || log.workspace_context?.operation || 'job');
+                const dataManagementBackupType = dataManagementContext.backup_type
+                    ? ` · ${this.escapeHtml(this.formatActivityValue(dataManagementContext.backup_type))}`
+                    : '';
+                return `Action: ${this.escapeHtml(dataManagementAction)}<br>Job: ${this.escapeHtml(dataManagementJobId)}<br><small class="text-muted">${this.escapeHtml(dataManagementOperation)}${dataManagementBackupType} · ${this.escapeHtml(dataManagementStatus)}</small>`;
                 
             case 'token_usage':
                 const tokenType = log.token_type || 'unknown';
@@ -2936,6 +3222,30 @@ class ControlCenter {
                 
             case 'document_creation':
                 return `File: ${this.escapeHtml(log.document?.file_name || 'Unknown')}, Type: ${this.escapeHtml(log.document?.file_type || '')}`;
+
+            case 'file_sync': {
+                const workspaceContext = log.workspace_context || {};
+                const additionalContext = log.additional_context || {};
+                const counts = additionalContext.counts || {};
+                const countParts = ['scanned', 'queued', 'unchanged', 'skipped', 'deleted', 'failed']
+                    .filter((key) => this.isActivityLogValuePresent(counts[key]))
+                    .map((key) => `${this.formatActivityValue(key)}: ${this.formatActivityLogNumber(counts[key])}`);
+                const detailParts = [
+                    `Action: ${this.escapeHtml(this.formatActivityValue(log.action || 'sync_event'))}`,
+                    `Source: ${this.escapeHtml(workspaceContext.source_name || additionalContext.source_name || 'Unknown Source')}`,
+                    `Scope: ${this.escapeHtml(this.formatActivityValue(workspaceContext.scope_type || log.workspace_type || 'workspace'))}`
+                ];
+                if (additionalContext.run_id) {
+                    detailParts.push(`Run: ${this.escapeHtml(additionalContext.run_id)}`);
+                }
+                if (countParts.length) {
+                    detailParts.push(countParts.join(', '));
+                }
+                if (additionalContext.error) {
+                    detailParts.push(`Error: ${this.escapeHtml(additionalContext.error)}`);
+                }
+                return detailParts.join(', ');
+            }
                 
             case 'token_usage':
                 return `Type: ${this.escapeHtml(log.token_type || 'unknown')}, Tokens: ${log.usage?.total_tokens || 0}, Model: ${this.escapeHtml(log.usage?.model || 'N/A')}`;
@@ -3001,6 +3311,7 @@ class ControlCenter {
             document_creation: 'bg-primary',
             document_deletion: 'bg-danger',
             document_metadata_update: 'bg-warning text-dark',
+            file_sync: 'bg-info text-dark',
             conversation_creation: 'bg-info text-dark',
             conversation_deletion: 'bg-secondary',
             conversation_archival: 'bg-dark',
@@ -3206,6 +3517,44 @@ class ControlCenter {
                     }
                 );
                 break;
+            case 'file_sync':
+                summaryFields.push(
+                    {
+                        label: 'Action',
+                        value: this.formatActivityValue(log.action || 'sync_event'),
+                        badgeClass: 'bg-info text-dark',
+                        columnClass: 'col-md-4'
+                    },
+                    {
+                        label: 'Source',
+                        value: log.workspace_context?.source_name || log.additional_context?.source_name || 'Unknown Source',
+                        columnClass: 'col-md-4'
+                    },
+                    {
+                        label: 'Scope',
+                        value: this.formatActivityValue(log.workspace_context?.scope_type || log.workspace_type || 'workspace'),
+                        columnClass: 'col-md-4'
+                    },
+                    {
+                        label: 'Scanned',
+                        value: log.additional_context?.counts?.scanned,
+                        formatter: (value) => this.formatActivityLogNumber(value),
+                        columnClass: 'col-md-4'
+                    },
+                    {
+                        label: 'Queued',
+                        value: log.additional_context?.counts?.queued,
+                        formatter: (value) => this.formatActivityLogNumber(value),
+                        columnClass: 'col-md-4'
+                    },
+                    {
+                        label: 'Failed',
+                        value: log.additional_context?.counts?.failed,
+                        formatter: (value) => this.formatActivityLogNumber(value),
+                        columnClass: 'col-md-4'
+                    }
+                );
+                break;
             case 'conversation_creation':
             case 'conversation_deletion':
             case 'conversation_archival':
@@ -3283,6 +3632,12 @@ class ControlCenter {
             {
                 label: 'Conversation ID',
                 value: log.chat_details?.conversation_id || log.conversation?.conversation_id,
+                code: true,
+                columnClass: 'col-12'
+            },
+            {
+                label: 'File Sync Source ID',
+                value: workspaceContext.source_id,
                 code: true,
                 columnClass: 'col-12'
             },
@@ -3693,7 +4048,7 @@ class ControlCenter {
         // Show loading state like users do
         tbody.innerHTML = `
             <tr>
-                <td colspan="7" class="text-center py-4">
+                <td colspan="8" class="text-center py-4">
                     <div class="spinner-border text-primary" role="status">
                         <span class="visually-hidden">Loading...</span>
                     </div>
@@ -3704,16 +4059,20 @@ class ControlCenter {
         
         try {
             // Get current filter values like users do
-            const searchTerm = document.getElementById('groupSearchInput')?.value || '';
-            const statusFilter = document.getElementById('groupStatusFilterSelect')?.value || 'all';
+            this.groupSearchTerm = document.getElementById('groupSearchInput')?.value || '';
+            this.groupStatusFilter = document.getElementById('groupStatusFilterSelect')?.value || 'all';
+            this.groupsPerPage = this.getManagementPageSize(
+                document.getElementById('groupManagementPerPageSelect')?.value,
+                this.groupsPerPage
+            );
             
             // Build API URL with filters - same pattern as loadUsers
             // Use cached metrics by default (force_refresh=false) to get pre-calculated data
             const params = new URLSearchParams({
-                page: 1,
-                per_page: 100,
-                search: searchTerm,
-                status_filter: statusFilter,
+                page: this.groupPage,
+                per_page: this.groupsPerPage,
+                search: this.groupSearchTerm,
+                status_filter: this.groupStatusFilter,
                 force_refresh: 'false'  // Use cached metrics for performance
             });
             
@@ -3737,7 +4096,9 @@ class ControlCenter {
             });
             
             // Render groups data directly like users
+            this.groupPage = Number(data.pagination?.page || this.groupPage);
             this.renderGroups(data.groups || []);
+            this.renderGroupsPagination(data.pagination);
             
             console.log('✅ Groups loaded and rendered successfully');
             
@@ -3745,11 +4106,12 @@ class ControlCenter {
             console.error('❌ Error loading groups:', error);
             
             // Show error state like users do
+            // xss-check: ignore reviewed legacy static table shell; dynamic error text is escaped before interpolation.
             tbody.innerHTML = `
                 <tr>
-                    <td colspan="7" class="text-center py-4 text-danger">
+                    <td colspan="8" class="text-center py-4 text-danger">
                         <i class="bi bi-exclamation-triangle" style="font-size: 2rem;"></i>
-                        <div class="mt-2">Error loading groups: ${error.message}</div>
+                        <div class="mt-2">Error loading groups: ${this.escapeHtml(error.message)}</div>
                         <button class="btn btn-sm btn-outline-primary mt-2" onclick="window.controlCenter.loadGroups()">
                             <i class="bi bi-arrow-clockwise me-1"></i>Retry
                         </button>
@@ -3766,14 +4128,17 @@ class ControlCenter {
         console.log('🎨 Rendering', groups.length, 'groups');
         
         if (groups.length === 0) {
+            // xss-check: ignore reviewed legacy static empty table shell with no untrusted interpolation.
             tbody.innerHTML = `
                 <tr>
-                    <td colspan="7" class="text-center py-4">
+                    <td colspan="8" class="text-center py-4">
                         <i class="bi bi-collection" style="font-size: 2rem; color: var(--bs-secondary);"></i>
                         <div class="mt-2">No groups found</div>
                     </td>
                 </tr>
             `;
+            this.updateVisibleSelectionState('.group-checkbox', 'selectAllGroups');
+            this.updateGroupBulkActionButton();
             return;
         }
         
@@ -3789,11 +4154,13 @@ class ControlCenter {
                 } else {
                     this.selectedGroups.delete(e.target.value);
                 }
+                this.updateVisibleSelectionState('.group-checkbox', 'selectAllGroups');
                 this.updateGroupBulkActionButton();
             });
         });
         
         // Update bulk action button state
+        this.updateVisibleSelectionState('.group-checkbox', 'selectAllGroups');
         this.updateGroupBulkActionButton();
         
         // Initialize sorting after data is loaded
@@ -3813,6 +4180,8 @@ class ControlCenter {
         
         // Get document metrics
         const totalDocs = group.metrics?.document_metrics?.total_documents || group.activity?.document_metrics?.total_documents || 0;
+        const tokenTotal = this.getGroupTokenTotal(group);
+        const tokenTotalFormatted = tokenTotal.toLocaleString();
         
         // Get group info
         const memberCount = group.member_count || (group.users ? group.users.length : 0);
@@ -3828,11 +4197,12 @@ class ControlCenter {
             'inactive': { class: 'bg-secondary', text: 'Inactive' }
         };
         const statusInfo = statusConfig[status] || statusConfig['active'];
+        const isSelected = this.selectedGroups.has(group.id);
         
         return `
             <tr>
                 <td>
-                    <input type="checkbox" class="form-check-input group-checkbox" value="${group.id}">
+                    <input type="checkbox" class="form-check-input group-checkbox" value="${group.id}" ${isSelected ? 'checked' : ''}>
                 </td>
                 <td>
                     <div class="fw-semibold">${this.escapeHtml(group.name || 'Unnamed Group')}</div>
@@ -3858,12 +4228,31 @@ class ControlCenter {
                     </div>
                 </td>
                 <td>
+                    <div class="small"><strong>${tokenTotalFormatted}</strong> token${tokenTotal === 1 ? '' : 's'}</div>
+                </td>
+                <td>
                     <button class="btn btn-outline-primary btn-sm" onclick="GroupManager.manageGroup('${group.id}')">
                         <i class="bi bi-gear me-1"></i>Manage
                     </button>
                 </td>
             </tr>
         `;
+    }
+
+    getGroupTokenTotal(group) {
+        const tokenTotal = Number(
+            group.token_total
+            ?? group.total_tokens
+            ?? group.metrics?.token_metrics?.total_tokens
+            ?? group.activity?.token_metrics?.total_tokens
+            ?? 0
+        );
+
+        if (!Number.isFinite(tokenTotal) || tokenTotal < 0) {
+            return 0;
+        }
+
+        return Math.trunc(tokenTotal);
     }
     
     formatBytes(bytes) {
@@ -3909,16 +4298,20 @@ class ControlCenter {
         
         try {
             // Get current filter values like groups do
-            const searchTerm = document.getElementById('publicWorkspaceSearchInput')?.value || '';
-            const statusFilter = document.getElementById('publicWorkspaceStatusFilterSelect')?.value || 'all';
+            this.publicWorkspaceSearchTerm = document.getElementById('publicWorkspaceSearchInput')?.value || '';
+            this.publicWorkspaceStatusFilter = document.getElementById('publicWorkspaceStatusFilterSelect')?.value || 'all';
+            this.publicWorkspacesPerPage = this.getManagementPageSize(
+                document.getElementById('publicWorkspaceManagementPerPageSelect')?.value,
+                this.publicWorkspacesPerPage
+            );
             
             // Build API URL with filters - same pattern as loadGroups
             // Use cached metrics by default (force_refresh=false) to get pre-calculated data
             const params = new URLSearchParams({
-                page: 1,
-                per_page: 100,
-                search: searchTerm,
-                status_filter: statusFilter,
+                page: this.publicWorkspacePage,
+                per_page: this.publicWorkspacesPerPage,
+                search: this.publicWorkspaceSearchTerm,
+                status_filter: this.publicWorkspaceStatusFilter,
                 force_refresh: 'false'  // Use cached metrics for performance
             });
             
@@ -3942,7 +4335,9 @@ class ControlCenter {
             });
             
             // Render workspaces data directly like groups
+            this.publicWorkspacePage = Number(data.pagination?.page || this.publicWorkspacePage);
             this.renderPublicWorkspaces(data.workspaces || []);
+            this.renderPublicWorkspacesPagination(data.pagination);
             
             console.log('✅ Public workspaces loaded and rendered successfully');
             
@@ -3979,6 +4374,8 @@ class ControlCenter {
                     </td>
                 </tr>
             `;
+            this.updateVisibleSelectionState('.public-workspace-checkbox', 'selectAllPublicWorkspaces');
+            this.updatePublicWorkspaceBulkActionButton();
             return;
         }
         
@@ -3994,12 +4391,19 @@ class ControlCenter {
                 } else {
                     this.selectedPublicWorkspaces.delete(e.target.value);
                 }
+                this.updateVisibleSelectionState('.public-workspace-checkbox', 'selectAllPublicWorkspaces');
                 this.updatePublicWorkspaceBulkActionButton();
             });
         });
         
         // Update bulk action button state
+        this.updateVisibleSelectionState('.public-workspace-checkbox', 'selectAllPublicWorkspaces');
         this.updatePublicWorkspaceBulkActionButton();
+
+        // Initialize sorting after data is loaded, matching the group table behavior.
+        if (!window.publicWorkspaceTableSorter) {
+            window.publicWorkspaceTableSorter = new GroupTableSorter('publicWorkspacesTable');
+        }
     }
     
     createPublicWorkspaceRow(workspace) {
@@ -4028,11 +4432,12 @@ class ControlCenter {
             'inactive': { class: 'bg-secondary', text: 'Inactive' }
         };
         const statusInfo = statusConfig[status] || statusConfig['active'];
+        const isSelected = this.selectedPublicWorkspaces.has(workspace.id);
         
         return `
             <tr>
                 <td>
-                    <input type="checkbox" class="form-check-input public-workspace-checkbox" value="${workspace.id}">
+                    <input type="checkbox" class="form-check-input public-workspace-checkbox" value="${workspace.id}" ${isSelected ? 'checked' : ''}>
                 </td>
                 <td>
                     <div class="fw-semibold">${this.escapeHtml(workspace.name || 'Unnamed Workspace')}</div>
@@ -4076,7 +4481,8 @@ class ControlCenter {
     }
 
     searchPublicWorkspaces(searchTerm) {
-        // Debounce search like groups
+        this.publicWorkspaceSearchTerm = searchTerm || '';
+        this.publicWorkspacePage = 1;
         clearTimeout(this.publicWorkspaceSearchTimeout);
         this.publicWorkspaceSearchTimeout = setTimeout(() => {
             this.loadPublicWorkspaces();
@@ -4084,7 +4490,8 @@ class ControlCenter {
     }
 
     filterPublicWorkspacesByStatus(status) {
-        // Reload with new filter
+        this.publicWorkspaceStatusFilter = status || 'all';
+        this.publicWorkspacePage = 1;
         this.loadPublicWorkspaces();
     }
 
@@ -4095,15 +4502,19 @@ class ControlCenter {
         const searchInput = document.getElementById('publicWorkspaceSearchInput');
         const statusSelect = document.getElementById('publicWorkspaceStatusFilterSelect');
         
-        const searchTerm = searchInput ? searchInput.value.trim() : '';
-        const statusFilter = statusSelect ? statusSelect.value : 'all';
+        this.publicWorkspaceSearchTerm = searchInput ? searchInput.value.trim() : '';
+        this.publicWorkspaceStatusFilter = statusSelect ? statusSelect.value : 'all';
+        this.publicWorkspacesPerPage = this.getManagementPageSize(
+            document.getElementById('publicWorkspaceManagementPerPageSelect')?.value,
+            this.publicWorkspacesPerPage
+        );
         
         // Build API URL with force_refresh=true
         const params = new URLSearchParams({
-            page: 1,
-            per_page: 100,
-            search: searchTerm,
-            status_filter: statusFilter,
+            page: this.publicWorkspacePage,
+            per_page: this.publicWorkspacesPerPage,
+            search: this.publicWorkspaceSearchTerm,
+            status_filter: this.publicWorkspaceStatusFilter,
             force_refresh: 'true'  // Force fresh calculation
         });
         
@@ -4116,7 +4527,9 @@ class ControlCenter {
             })
             .then(data => {
                 console.log('🌍 Refreshed public workspaces data received:', data);
+                this.publicWorkspacePage = Number(data.pagination?.page || this.publicWorkspacePage);
                 this.renderPublicWorkspaces(data.workspaces || []);
+                this.renderPublicWorkspacesPagination(data.pagination);
                 
                 // Show success message
                 this.showAlert('success', 'Public workspaces refreshed successfully');
