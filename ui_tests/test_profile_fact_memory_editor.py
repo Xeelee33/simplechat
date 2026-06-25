@@ -1,12 +1,13 @@
 # test_profile_fact_memory_editor.py
 """
 UI test for the profile fact-memory editor.
-Version: 0.241.008
-Implemented in: 0.240.079; 0.240.082; 0.240.083; 0.241.003; 0.241.004; 0.241.008
+Version: 0.241.154
+Implemented in: 0.240.079; 0.240.082; 0.240.083; 0.241.003; 0.241.004; 0.241.008; 0.241.114
 
 This test ensures a signed-in user can create, edit, retag, and delete
 fact-memory entries from the profile page using the compact summary and modal editor
-without browser parse or runtime errors breaking the workflow.
+without browser parse or runtime errors breaking the workflow, including nested
+delete confirmation stacking above the manager dialog.
 """
 
 import os

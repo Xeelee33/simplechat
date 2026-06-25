@@ -3,14 +3,14 @@
 from config import *
 import functions_authentication
 import functions_settings
-from functions_authentication import *
-from functions_settings import *
 from typing import Iterable
+
+from functions_workspace_branding import DEFAULT_WORKSPACE_HERO_COLOR
 
 
 def create_group(name, description):
     """Creates a new group. The creator is the Owner by default."""
-    user_info = get_current_user_info()
+    user_info = functions_authentication.get_current_user_info()
     if not user_info:
         raise Exception("No user in session")
 
@@ -21,6 +21,9 @@ def create_group(name, description):
         "id": new_group_id,
         "name": name,
         "description": description,
+        "heroColor": DEFAULT_WORKSPACE_HERO_COLOR,
+        "logoBase64": "",
+        "logoVersion": 1,
         "owner":
             {
                 "id": user_info["userId"],
@@ -37,6 +40,7 @@ def create_group(name, description):
             }
         ],
         "pendingUsers": [],
+        "disable_file_downloads": False,
         "createdDate": now_str,
         "modifiedDate": now_str
     }
@@ -71,6 +75,31 @@ def search_groups(search_query, user_id):
         enable_cross_partition_query=True
     ))
     return results
+
+
+def search_all_groups(search_query, limit=10):
+    """
+    Return groups matching a search term for admin management workflows.
+    """
+    normalized_query = str(search_query or '').strip().lower()
+    if not normalized_query:
+        return []
+
+    query = """
+        SELECT *
+        FROM c
+        WHERE CONTAINS(LOWER(c.name), @search)
+           OR (IS_DEFINED(c.description) AND CONTAINS(LOWER(c.description), @search))
+    """
+    params = [
+        {"name": "@search", "value": normalized_query}
+    ]
+    results = list(cosmos_groups_container.query_items(
+        query=query,
+        parameters=params,
+        enable_cross_partition_query=True
+    ))
+    return results[:max(1, min(int(limit or 10), 25))]
 
 def get_user_groups(user_id):
     """

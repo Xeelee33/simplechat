@@ -18,13 +18,19 @@ How-to guides assume you already know what area of the product you are working i
         <div class="latest-release-card-icon"><i class="bi bi-file-earmark-arrow-up"></i></div>
         <h2>Content and agents</h2>
         <p>Add documents, create agents, and use the ServiceNow agent guides when your work is centered on user workflows and external system actions.</p>
-        <p><a href="{{ '/how-to/add_documents/' | relative_url }}">Add documents</a> · <a href="{{ '/how-to/create_agents/' | relative_url }}">Create agents</a> · <a href="{{ '/how-to/agents/ServiceNow/' | relative_url }}">ServiceNow guides</a></p>
+        <p><a href="{{ '/how-to/add_documents/' | relative_url }}">Add documents</a> · <a href="{{ '/how-to/create_agents/' | relative_url }}">Create agents</a> · <a href="{{ '/how-to/custom_pages/' | relative_url }}">Create custom pages</a> · <a href="{{ '/how-to/agents/ServiceNow/' | relative_url }}">ServiceNow guides</a></p>
     </article>
     <article class="latest-release-card">
         <div class="latest-release-card-icon"><i class="bi bi-person-badge"></i></div>
         <h2>Identity and security</h2>
-        <p>Use the managed identity and Azure Speech guides when you want to replace stored secrets or handle service-specific authentication correctly.</p>
-        <p><a href="{{ '/how-to/use_managed_identity/' | relative_url }}">Managed identity</a> · <a href="{{ '/how-to/azure_speech_managed_identity_manul_setup/' | relative_url }}">Azure Speech setup</a></p>
+        <p>Use the model endpoint, managed identity, and Azure Speech guides when you want to replace stored secrets or handle service-specific authentication correctly.</p>
+        <p><a href="{{ '/how-to/model_endpoint_identity_setup/' | relative_url }}">Model endpoint identity</a> · <a href="{{ '/how-to/use_managed_identity/' | relative_url }}">Managed identity</a> · <a href="{{ '/how-to/azure_speech_managed_identity_manul_setup/' | relative_url }}">Azure Speech setup</a></p>
+    </article>
+    <article class="latest-release-card">
+        <div class="latest-release-card-icon"><i class="bi bi-palette"></i></div>
+        <h2>Admin UI settings</h2>
+        <p>Use this guide when you need to change branding, home page text, health checks, API docs, classification banners, Support, external links, or global system settings.</p>
+        <p><a href="{{ '/how-to/admin_ui_settings/' | relative_url }}">Configure branding and support settings</a> · <a href="{{ '/admin_configuration/' | relative_url }}">Admin overview</a></p>
     </article>
     <article class="latest-release-card">
         <div class="latest-release-card-icon"><i class="bi bi-diagram-3"></i></div>
