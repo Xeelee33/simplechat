@@ -48,6 +48,7 @@ jobs:
       SIMPLECHAT_UI_AUTH_RESOURCE: ${{ vars.SIMPLECHAT_UI_AUTH_RESOURCE }}
       PLAYWRIGHT_SERVICE_URL: ${{ vars.PLAYWRIGHT_SERVICE_URL }}
       AZD_ENV_FILE_B64: ${{ secrets.AZD_ENV_FILE_B64 }}
+      AZD_CONFIG_FILE_B64: ${{ secrets.AZD_CONFIG_FILE_B64 }}
       SIMPLECHAT_UI_STORAGE_STATE_B64: ${{ secrets.SIMPLECHAT_UI_STORAGE_STATE_B64 }}
       SIMPLECHAT_UI_ADMIN_STORAGE_STATE_B64: ${{ secrets.SIMPLECHAT_UI_ADMIN_STORAGE_STATE_B64 }}
       SIMPLECHAT_UI_ARTIFACT_DIR: ui_tests/artifacts
@@ -113,6 +114,10 @@ jobs:
 
           if [[ -n "${AZD_ENV_FILE_B64:-}" ]]; then
             printf '%s' "$AZD_ENV_FILE_B64" | base64 -d > ".azure/$AZURE_ENV_NAME/.env"
+          fi
+
+          if [[ -n "${AZD_CONFIG_FILE_B64:-}" ]]; then
+            printf '%s' "$AZD_CONFIG_FILE_B64" | base64 -d > ".azure/$AZURE_ENV_NAME/config.json"
           fi
 
           cat > .azure/config.json <<EOF
