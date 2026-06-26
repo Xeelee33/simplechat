@@ -673,19 +673,43 @@ function getAvailableModelOptions() {
   if (!globalSelect) {
     return '<option value="">Default</option>';
   }
-  let options = '';
+
+  const tempSelect = document.createElement('select');
+
   for (const opt of globalSelect.options) {
-    options += `<option value="${escapeHtml(opt.value)}"${opt.selected ? ' selected' : ''}>${escapeHtml(opt.text)}</option>`;
+    const cloned = document.createElement('option');
+    cloned.value = opt.value;
+    cloned.textContent = opt.text;
+
+    if (opt.dataset?.deploymentName) {
+      cloned.dataset.deploymentName = opt.dataset.deploymentName;
+    }
+    if (opt.dataset?.modelId) {
+      cloned.dataset.modelId = opt.dataset.modelId;
+    }
+    if (opt.dataset?.endpointId) {
+      cloned.dataset.endpointId = opt.dataset.endpointId;
+    }
+    if (opt.dataset?.provider) {
+      cloned.dataset.provider = opt.dataset.provider;
+    }
+    if (opt.selected) {
+      cloned.selected = true;
+    }
+
+    tempSelect.appendChild(cloned);
   }
-  return options || '<option value="">Default</option>';
+
+  const html = tempSelect.innerHTML;
+  return html || '<option value="">Default</option>';
 }
 
 /**
  * Handle summary generation (generate or regenerate)
  * @param {string} conversationId - The conversation ID
- * @param {string} modelDeployment - Selected model deployment
+ * @param {Object} modelPayload - Selected model metadata
  */
-async function handleGenerateSummary(conversationId, modelDeployment) {
+async function handleGenerateSummary(conversationId, modelPayload) {
   const cardBody = document.getElementById('summary-card-body');
   if (!cardBody) {
     return;
@@ -704,7 +728,7 @@ async function handleGenerateSummary(conversationId, modelDeployment) {
     const response = await fetch(`/api/conversations/${conversationId}/summary`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model_deployment: modelDeployment })
+      body: JSON.stringify(modelPayload || {})
     });
 
     if (!response.ok) {
@@ -766,8 +790,18 @@ document.addEventListener('click', function(e) {
     const cid = btn.getAttribute('data-conversation-id');
     const modelSelect = document.getElementById('summary-model-select');
     const selectedOption = modelSelect ? modelSelect.options[modelSelect.selectedIndex] : null;
-    const model = selectedOption?.dataset?.deploymentName || (modelSelect ? modelSelect.value : '');
-    handleGenerateSummary(cid, model);
+
+    const modelDeployment = selectedOption?.dataset?.deploymentName || (modelSelect ? modelSelect.value : '');
+    const modelId = selectedOption?.dataset?.modelId || '';
+    const modelEndpointId = selectedOption?.dataset?.endpointId || '';
+    const modelProvider = selectedOption?.dataset?.provider || '';
+
+    handleGenerateSummary(cid, {
+      model_deployment: modelDeployment,
+      model_id: modelId,
+      model_endpoint_id: modelEndpointId,
+      model_provider: modelProvider
+    });
     return;
   }
 
@@ -779,8 +813,17 @@ document.addEventListener('click', function(e) {
     // Use the currently selected global model for regeneration
     const globalSelect = document.getElementById('model-select');
     const selectedOption = globalSelect ? globalSelect.options[globalSelect.selectedIndex] : null;
-    const model = selectedOption?.dataset?.deploymentName || (globalSelect ? globalSelect.value : '');
-    handleGenerateSummary(cid, model);
+    const modelDeployment = selectedOption?.dataset?.deploymentName || (globalSelect ? globalSelect.value : '');
+    const modelId = selectedOption?.dataset?.modelId || '';
+    const modelEndpointId = selectedOption?.dataset?.endpointId || '';
+    const modelProvider = selectedOption?.dataset?.provider || '';
+
+    handleGenerateSummary(cid, {
+      model_deployment: modelDeployment,
+      model_id: modelId,
+      model_endpoint_id: modelEndpointId,
+      model_provider: modelProvider
+    });
     return;
   }
 
