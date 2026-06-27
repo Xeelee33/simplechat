@@ -30,6 +30,7 @@ PUBLIC_PATHS = {
     "/favicon.ico",
     "/static/js/<path:filename>",
     "/acceptable_use_policy.html",
+    "/auth/teams/token-exchange",
     "/external/healthcheck",
     "/external/healthcheckz",
 }

@@ -77,6 +77,7 @@ For feature-focused and fix-focused drill-downs by version, see [Features by Ver
     *   Added a first-class Snowflake action type for querying Snowflake data warehouses through the Snowflake Python Connector, focused on read-only data retrieval for agent analysis, charts, generated documents, and exports.
     *   Added tailored action configuration for account, warehouse, default database/schema, role, password/key-pair/OAuth authentication, reusable workspace identities, and query execution limits.
     *   Added read-only SQL enforcement, automatic result limiting, structured column/row responses, Semantic Kernel loader integration, Key Vault secret handling, governance labels, schemas, feature documentation, and functional coverage.
+    *   Uses `snowflake-connector-python[pandas]==3.18.0` so the local Python 3.13 development environment can install from wheels without requiring native C++ build tooling.
     *   (Ref: `SnowflakePlugin`, `SnowflakePluginFactory`, Snowflake action modal, `SNOWFLAKE_ACTION.md`)
 
 *   **Workflow Per-Document Analysis and Generated Office Exports**
