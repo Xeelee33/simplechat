@@ -19,6 +19,7 @@ let externalLinksMenuName = window.externalLinksMenuName || 'External Links';
 let agentsPagePromotedPopularAgents = Array.isArray(window.agentsPagePromotedPopularAgents)
     ? window.agentsPagePromotedPopularAgents
     : [];
+let enableSemanticKernel = Boolean(window.enableSemanticKernel);
 let releaseNotificationsRegistration = window.releaseNotificationsRegistration || {
     registered: false,
     name: '',
@@ -387,6 +388,19 @@ function renderPromotedPopularAgents() {
 
 async function loadPromotedPopularAvailableAgents() {
     if (!promotedPopularAgentsSelect) {
+        return;
+    }
+    if (!enableSemanticKernel) {
+        agentsPagePromotedAvailableAgents = [];
+        setPromotedPopularLoadError('');
+        promotedPopularAgentsSelect.textContent = '';
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = 'Enable Agents to load available agents';
+        promotedPopularAgentsSelect.appendChild(option);
+        if (promotedPopularAgentsAddButton) {
+            promotedPopularAgentsAddButton.disabled = true;
+        }
         return;
     }
     try {

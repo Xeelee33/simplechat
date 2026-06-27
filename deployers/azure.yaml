@@ -56,6 +56,7 @@ hooks:
         export var_keyVaultUri=${var_keyVaultUri}
         export var_keyVaultName=${var_keyVaultName}
         export var_authenticationType=${var_authenticationType}
+        export var_redisAuthenticationType=${var_redisAuthenticationType}
         export var_openAIEndpoint=${var_openAIEndpoint}
         export var_openAISubscriptionId=${var_openAISubscriptionId}
         export var_openAIResourceGroup=${var_openAIResourceGroup}
@@ -288,6 +289,7 @@ hooks:
             'var_openAIGPTModels',
             'var_openAIResourceGroup',
             'var_openAISubscriptionId',
+            'var_redisAuthenticationType',
             'var_redisCacheHostName',
             'var_rgName',
             'var_searchServiceEndpoint',

@@ -7,9 +7,9 @@ from functions_notifications import *
 from swagger_wrapper import swagger_route, get_auth_security
 from functions_debug import debug_print
 
-def register_route_backend_notifications(app):
+def register_route_backend_notifications(bp):
 
-    @app.route("/api/notifications", methods=["GET"])
+    @bp.route("/api/notifications", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -59,7 +59,7 @@ def register_route_backend_notifications(app):
                 'error': 'Failed to fetch notifications'
             }), 500
 
-    @app.route("/api/notifications/count", methods=["GET"])
+    @bp.route("/api/notifications/count", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -83,7 +83,7 @@ def register_route_backend_notifications(app):
                 'count': 0
             }), 500
 
-    @app.route("/api/notifications/workflow-alerts", methods=["GET"])
+    @bp.route("/api/notifications/workflow-alerts", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -107,7 +107,7 @@ def register_route_backend_notifications(app):
                 'notifications': [],
             }), 500
 
-    @app.route("/api/notifications/<notification_id>/read", methods=["POST"])
+    @bp.route("/api/notifications/<notification_id>/read", methods=["POST"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -137,7 +137,7 @@ def register_route_backend_notifications(app):
                 'error': 'Internal server error'
             }), 500
 
-    @app.route("/api/notifications/<notification_id>/dismiss", methods=["DELETE"])
+    @bp.route("/api/notifications/<notification_id>/dismiss", methods=["DELETE"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -167,7 +167,7 @@ def register_route_backend_notifications(app):
                 'error': 'Internal server error'
             }), 500
 
-    @app.route("/api/notifications/mark-all-read", methods=["POST"])
+    @bp.route("/api/notifications/mark-all-read", methods=["POST"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -192,7 +192,7 @@ def register_route_backend_notifications(app):
                 'error': 'Internal server error'
             }), 500
 
-    @app.route("/api/notifications/settings", methods=["POST"])
+    @bp.route("/api/notifications/settings", methods=["POST"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required

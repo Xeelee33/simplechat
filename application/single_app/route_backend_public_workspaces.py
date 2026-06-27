@@ -90,12 +90,12 @@ def get_user_details_from_graph(user_id):
         print(f"Failed to get user details for {user_id}: {e}")
         return {"displayName": "", "email": ""}
 
-def register_route_backend_public_workspaces(app):
+def register_route_backend_public_workspaces(bp):
     """
     Register all public-workspace–related API endpoints under '/api/public_workspaces/...'
     """
 
-    @app.route("/api/public_workspaces/discover", methods=["GET"])
+    @bp.route("/api/public_workspaces/discover", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -125,7 +125,7 @@ def register_route_backend_public_workspaces(app):
 
         return jsonify(results), 200
 
-    @app.route("/api/public_workspaces", methods=["GET"])
+    @bp.route("/api/public_workspaces", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -169,9 +169,13 @@ def register_route_backend_public_workspaces(app):
         total_count = len(all_ws)
         slice_ws = all_ws[offset: offset + page_size]
 
-        # get active from user settings
-        settings = get_user_settings(user_id)
-        active_id = settings["settings"].get("activePublicWorkspaceOid", "")
+        try:
+            active_id, _, _ = require_active_public_workspace(
+                user_id,
+                allowed_roles=("Owner", "Admin", "DocumentManager", "User"),
+            )
+        except (ValueError, LookupError, PermissionError):
+            active_id = ""
 
         mapped = []
         app_settings = get_settings()
@@ -208,7 +212,7 @@ def register_route_backend_public_workspaces(app):
             "total_count": total_count
         }), 200
 
-    @app.route("/api/public_workspaces", methods=["POST"])
+    @bp.route("/api/public_workspaces", methods=["POST"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -229,7 +233,7 @@ def register_route_backend_public_workspaces(app):
         except Exception as ex:
             return jsonify({"error": str(ex)}), 400
 
-    @app.route("/api/public_workspaces/<ws_id>", methods=["GET"])
+    @bp.route("/api/public_workspaces/<ws_id>", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -259,7 +263,7 @@ def register_route_backend_public_workspaces(app):
 
         return jsonify(build_public_workspace_public_summary(ws)), 200
 
-    @app.route("/api/public_workspaces/<ws_id>/download-settings", methods=["PATCH"])
+    @bp.route("/api/public_workspaces/<ws_id>/download-settings", methods=["PATCH"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -296,7 +300,7 @@ def register_route_backend_public_workspaces(app):
             "disable_file_downloads": ws["disable_file_downloads"],
         }), 200
 
-    @app.route("/api/public_workspaces/<ws_id>", methods=["PATCH", "PUT"])
+    @bp.route("/api/public_workspaces/<ws_id>", methods=["PATCH", "PUT"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -330,7 +334,7 @@ def register_route_backend_public_workspaces(app):
         except exceptions.CosmosHttpResponseError as ex:
             return jsonify({"error": str(ex)}), 400
 
-    @app.route("/api/public_workspaces/<ws_id>/logo", methods=["GET"])
+    @bp.route("/api/public_workspaces/<ws_id>/logo", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -356,7 +360,7 @@ def register_route_backend_public_workspaces(app):
             download_name="workspace-logo.png",
         )
 
-    @app.route("/api/public_workspaces/<ws_id>/logo", methods=["POST"])
+    @bp.route("/api/public_workspaces/<ws_id>/logo", methods=["POST"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -401,7 +405,7 @@ def register_route_backend_public_workspaces(app):
             "logoVersion": ws["logoVersion"],
         }), 200
 
-    @app.route("/api/public_workspaces/<ws_id>", methods=["DELETE"])
+    @bp.route("/api/public_workspaces/<ws_id>", methods=["DELETE"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -423,7 +427,7 @@ def register_route_backend_public_workspaces(app):
         delete_public_workspace(ws_id)
         return jsonify({"message": "Deleted"}), 200
 
-    @app.route("/api/public_workspaces/setActive", methods=["PATCH"])
+    @bp.route("/api/public_workspaces/setActive", methods=["PATCH"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -448,7 +452,7 @@ def register_route_backend_public_workspaces(app):
 
         return jsonify({"message": f"Active set to {ws_id}"}), 200
 
-    @app.route("/api/public_workspaces/<ws_id>/requests", methods=["GET"])
+    @bp.route("/api/public_workspaces/<ws_id>/requests", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -475,7 +479,7 @@ def register_route_backend_public_workspaces(app):
 
         return jsonify(ws.get("pendingDocumentManagers", [])), 200
 
-    @app.route("/api/public_workspaces/<ws_id>/requests", methods=["POST"])
+    @bp.route("/api/public_workspaces/<ws_id>/requests", methods=["POST"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -509,7 +513,7 @@ def register_route_backend_public_workspaces(app):
         cosmos_public_workspaces_container.upsert_item(ws)
         return jsonify({"message": "Requested"}), 201
 
-    @app.route("/api/public_workspaces/<ws_id>/requests/<req_id>", methods=["PATCH"])
+    @bp.route("/api/public_workspaces/<ws_id>/requests/<req_id>", methods=["PATCH"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -556,7 +560,7 @@ def register_route_backend_public_workspaces(app):
         cosmos_public_workspaces_container.upsert_item(ws)
         return jsonify({"message": msg}), 200
 
-    @app.route("/api/public_workspaces/<ws_id>/members", methods=["GET"])
+    @bp.route("/api/public_workspaces/<ws_id>/members", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -633,7 +637,7 @@ def register_route_backend_public_workspaces(app):
 
         return jsonify([m for m in results if keep(m)]), 200
 
-    @app.route("/api/public_workspaces/<ws_id>/members", methods=["POST"])
+    @bp.route("/api/public_workspaces/<ws_id>/members", methods=["POST"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -696,7 +700,7 @@ def register_route_backend_public_workspaces(app):
         
         return jsonify({"message": "Member added"}), 200
 
-    @app.route("/api/public_workspaces/<ws_id>/members/<member_id>", methods=["DELETE"])
+    @bp.route("/api/public_workspaces/<ws_id>/members/<member_id>", methods=["DELETE"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -738,7 +742,7 @@ def register_route_backend_public_workspaces(app):
         cosmos_public_workspaces_container.upsert_item(ws)
         return jsonify({"success": True, "message": "Removed"}), 200
 
-    @app.route("/api/public_workspaces/<ws_id>/members/<member_id>", methods=["PATCH"])
+    @bp.route("/api/public_workspaces/<ws_id>/members/<member_id>", methods=["PATCH"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -848,7 +852,7 @@ def register_route_backend_public_workspaces(app):
         
         return jsonify({"success": True, "message": "Role updated"}), 200
 
-    @app.route("/api/public_workspaces/<ws_id>/transferOwnership", methods=["PATCH"])
+    @bp.route("/api/public_workspaces/<ws_id>/transferOwnership", methods=["PATCH"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -914,7 +918,7 @@ def register_route_backend_public_workspaces(app):
         cosmos_public_workspaces_container.upsert_item(ws)
         return jsonify({"message": "Ownership transferred"}), 200
 
-    @app.route("/api/public_workspaces/<ws_id>/fileCount", methods=["GET"])
+    @bp.route("/api/public_workspaces/<ws_id>/fileCount", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -942,7 +946,7 @@ def register_route_backend_public_workspaces(app):
         file_count = next(count_iter, 0)
         return jsonify({"fileCount": file_count}), 200
 
-    @app.route("/api/public_workspaces/<ws_id>/promptCount", methods=["GET"])
+    @bp.route("/api/public_workspaces/<ws_id>/promptCount", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -959,7 +963,7 @@ def register_route_backend_public_workspaces(app):
         prompt_count = count_public_prompts_for_workspace(ws_id)
         return jsonify({"promptCount": prompt_count}), 200
 
-    @app.route("/api/public_workspaces/<ws_id>/stats", methods=["GET"])
+    @bp.route("/api/public_workspaces/<ws_id>/stats", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1195,7 +1199,7 @@ def register_route_backend_public_workspaces(app):
 
         return jsonify(stats), 200
 
-    @app.route("/api/public_workspaces/<ws_id>/activity", methods=["GET"])
+    @bp.route("/api/public_workspaces/<ws_id>/activity", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required

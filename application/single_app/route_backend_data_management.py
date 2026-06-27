@@ -58,8 +58,8 @@ def _log_data_management_admin_action(action, description, additional_context=No
         )
 
 
-def register_route_backend_data_management(app):
-    @app.route("/api/admin/data-management/settings", methods=["GET"])
+def register_route_backend_data_management(bp):
+    @bp.route("/api/admin/data-management/settings", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -70,7 +70,7 @@ def register_route_backend_data_management(app):
             "settings": sanitize_data_management_settings_for_admin(settings),
         }), 200
 
-    @app.route("/api/admin/data-management/settings", methods=["PUT"])
+    @bp.route("/api/admin/data-management/settings", methods=["PUT"])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -99,7 +99,7 @@ def register_route_backend_data_management(app):
             "settings": sanitize_data_management_settings_for_admin(settings),
         }), 200
 
-    @app.route("/api/admin/data-management/encryption-key", methods=["POST"])
+    @bp.route("/api/admin/data-management/encryption-key", methods=["POST"])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -122,7 +122,7 @@ def register_route_backend_data_management(app):
         )
         return jsonify({"success": True, "settings": settings}), 200
 
-    @app.route("/api/admin/data-management/storage/test", methods=["POST"])
+    @bp.route("/api/admin/data-management/storage/test", methods=["POST"])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -143,7 +143,7 @@ def register_route_backend_data_management(app):
             return jsonify({"success": False, "error": "Backup storage connection test failed."}), 400
         return jsonify(result), 200
 
-    @app.route("/api/admin/data-management/target/cosmos/test", methods=["POST"])
+    @bp.route("/api/admin/data-management/target/cosmos/test", methods=["POST"])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -161,7 +161,7 @@ def register_route_backend_data_management(app):
             return jsonify({"success": False, "error": "Target Cosmos connection test failed."}), 400
         return jsonify(result), 200
 
-    @app.route("/api/admin/data-management/target/search/test", methods=["POST"])
+    @bp.route("/api/admin/data-management/target/search/test", methods=["POST"])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -179,7 +179,7 @@ def register_route_backend_data_management(app):
             return jsonify({"success": False, "error": "Target Search connection test failed."}), 400
         return jsonify(result), 200
 
-    @app.route("/api/admin/data-management/target/enhanced-citation-storage/test", methods=["POST"])
+    @bp.route("/api/admin/data-management/target/enhanced-citation-storage/test", methods=["POST"])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -201,7 +201,7 @@ def register_route_backend_data_management(app):
             return jsonify({"success": False, "error": "Target Enhanced Citation Storage connection test failed."}), 400
         return jsonify(result), 200
 
-    @app.route("/api/admin/data-management/jobs", methods=["GET"])
+    @bp.route("/api/admin/data-management/jobs", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -210,7 +210,7 @@ def register_route_backend_data_management(app):
         jobs = [sanitize_data_management_job_for_admin(job) for job in get_data_management_jobs(limit=limit)]
         return jsonify({"success": True, "jobs": jobs}), 200
 
-    @app.route("/api/admin/data-management/jobs/<job_id>", methods=["GET"])
+    @bp.route("/api/admin/data-management/jobs/<job_id>", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -220,7 +220,7 @@ def register_route_backend_data_management(app):
             return jsonify({"success": False, "error": "Data Management job was not found."}), 404
         return jsonify({"success": True, **detail}), 200
 
-    @app.route("/api/admin/data-management/backups", methods=["GET"])
+    @bp.route("/api/admin/data-management/backups", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -229,7 +229,7 @@ def register_route_backend_data_management(app):
         backup_summary = get_data_management_backup_summary(limit=limit)
         return jsonify({"success": True, **backup_summary}), 200
 
-    @app.route("/api/admin/data-management/migration/catalog/<target_type>", methods=["GET"])
+    @bp.route("/api/admin/data-management/migration/catalog/<target_type>", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -242,7 +242,7 @@ def register_route_backend_data_management(app):
             return jsonify({"success": False, "error": str(exc)}), 400
         return jsonify({"success": True, **catalog}), 200
 
-    @app.route("/api/admin/data-management/migration/summary", methods=["POST"])
+    @bp.route("/api/admin/data-management/migration/summary", methods=["POST"])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -254,7 +254,7 @@ def register_route_backend_data_management(app):
             return jsonify({"success": False, "error": str(exc)}), 400
         return jsonify({"success": True, "summary": summary}), 200
 
-    @app.route("/api/admin/data-management/jobs", methods=["POST"])
+    @bp.route("/api/admin/data-management/jobs", methods=["POST"])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required

@@ -1,8 +1,30 @@
 <!-- BEGIN release_notes.md BLOCK -->
 
-This page tracks notable Simple Chat releases and organizes the detailed change log by version. The timeline below provides a quick visual overview of the current release progression through v0.242.068, and the per-version entries continue immediately after it.
+This page tracks notable Simple Chat releases and organizes the detailed change log by version. The timeline below provides a quick visual overview of the current release progression through v0.242.074, and the per-version entries continue immediately after it.
 
 For feature-focused and fix-focused drill-downs by version, see [Features by Version](/explanation/features/) and [Fixes by Version](/explanation/fixes/).
+
+### **(v0.242.074)**
+
+#### New Features
+
+*   **Azure Billing Dynamic Charts**
+    *   Updated the Azure Billing action chart path to return SimpleChat `simplechart` Markdown instead of server-rendered matplotlib PNG image payloads.
+    *   Preserved existing `plot_chart` / `plot_custom_chart` inputs while returning `chart_payload`, `chart_markdown`, summary, and renderer metadata for interactive chat display.
+    *   Added regression coverage for stacked and pie Azure Billing chart output.
+    *   (Ref: Azure Billing action, dynamic inline charts, `chart_markdown`, `test_azure_billing_dynamic_charts.py`)
+
+### **(v0.242.069)**
+
+#### New Features
+
+*   **Blueprint Route Security Policies**
+    *   Migrated SimpleChat route registration to Blueprint-backed route groups with explicit `before_request` authentication policies.
+    *   Added reusable Blueprint auth helpers that compose the existing login, user, admin, and external bearer-token decorators.
+    *   Added route policy tests covering Blueprint registration, unauthenticated access expectations, public/external route exceptions, and route-test completeness.
+    *   Updated route-authentication prompts, Python route instructions, PR-prep guidance, and CI route validation workflow so future route work must update and run the route policy tests.
+    *   Preserved Custom Pages as login-required with page metadata role checks layered inside the dispatcher.
+    *   (Ref: Blueprint route policies, route auth guardrails, `functional_tests/route_tests/`, `functions_authentication.py`, `app.py`)
 
 ### **(v0.242.068)**
 

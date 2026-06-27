@@ -647,15 +647,15 @@ def _build_chat_prompt_catalog(*, user_id, settings, user_groups_raw, user_visib
 
     return catalog
 
-def register_route_frontend_chats(app):
-    @app.route('/chats', methods=['GET'])
+def register_route_frontend_chats(bp):
+    @bp.route('/chats', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
     def chats():
         user_id = get_current_user_id()
         if not user_id:
-            return redirect(url_for('login'))
+            return redirect(url_for('frontend_authentication.login'))
 
         settings = get_settings()
         user_settings = get_user_settings(user_id)
@@ -728,7 +728,7 @@ def register_route_frontend_chats(app):
                     })
 
         if not user_id:
-            return redirect(url_for('login'))
+            return redirect(url_for('frontend_authentication.login'))
         
         # Get user display name from user settings
         user_display_name = user_settings.get('display_name', '')
@@ -822,14 +822,14 @@ def register_route_frontend_chats(app):
             initial_chat_model_selection=initial_chat_model_selection,
         )
 
-    @app.route('/workflow-activity', methods=['GET'])
+    @bp.route('/workflow-activity', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
     def workflow_activity():
         user_id = get_current_user_id()
         if not user_id:
-            return redirect(url_for('login'))
+            return redirect(url_for('frontend_authentication.login'))
 
         settings = get_settings()
         try:
@@ -851,7 +851,7 @@ def register_route_frontend_chats(app):
             settings=public_settings,
         )
     
-    @app.route('/upload', methods=['POST'])
+    @bp.route('/upload', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1552,7 +1552,7 @@ def register_route_frontend_chats(app):
         }), 200
     
     # THIS IS THE OLD ROUTE, KEEPING IT FOR REFERENCE, WILL DELETE LATER
-    @app.route("/view_pdf", methods=["GET"])
+    @bp.route("/view_pdf", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1707,7 +1707,7 @@ def register_route_frontend_chats(app):
                 os.remove(temp_pdf_path)
 
     # --- Updated route ---
-    @app.route('/view_document')
+    @bp.route('/view_document')
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required

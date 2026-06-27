@@ -35,7 +35,7 @@ from functions_simplechat_operations import search_directory_users
 from swagger_wrapper import get_auth_security, swagger_route
 
 
-def register_route_backend_file_sync(app):
+def register_route_backend_file_sync(bp):
     def _error(message, status=400):
         return jsonify({"error": message}), status
 
@@ -184,7 +184,7 @@ def register_route_backend_file_sync(app):
         result = browse_file_sync_source_path(scope_type, scope_id, payload, user_id, source_id=source_id)
         return jsonify({"browse": result}), 200
 
-    @app.route('/api/admin/file-sync/users/search', methods=['GET'])
+    @bp.route('/api/admin/file-sync/users/search', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -198,7 +198,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/admin/file-sync/groups/search', methods=['GET'])
+    @bp.route('/api/admin/file-sync/groups/search', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -212,7 +212,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/admin/file-sync/public-workspaces/search', methods=['GET'])
+    @bp.route('/api/admin/file-sync/public-workspaces/search', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -226,7 +226,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/admin/file-sync/<scope_type>/<scope_id>/sources/browse', methods=['POST'])
+    @bp.route('/api/admin/file-sync/<scope_type>/<scope_id>/sources/browse', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -238,7 +238,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/admin/file-sync/<scope_type>/<scope_id>/sources/<source_id>/browse', methods=['POST'])
+    @bp.route('/api/admin/file-sync/<scope_type>/<scope_id>/sources/<source_id>/browse', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -250,7 +250,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/admin/file-sync/personal/<target_user_id>/sources', methods=['GET'])
+    @bp.route('/api/admin/file-sync/personal/<target_user_id>/sources', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -262,7 +262,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/admin/file-sync/personal/<target_user_id>/sources', methods=['POST'])
+    @bp.route('/api/admin/file-sync/personal/<target_user_id>/sources', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -274,7 +274,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/admin/file-sync/personal/<target_user_id>/sources/test-connection', methods=['POST'])
+    @bp.route('/api/admin/file-sync/personal/<target_user_id>/sources/test-connection', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -286,7 +286,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/admin/file-sync/personal/<target_user_id>/sources/<source_id>', methods=['PATCH'])
+    @bp.route('/api/admin/file-sync/personal/<target_user_id>/sources/<source_id>', methods=['PATCH'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -298,7 +298,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/admin/file-sync/personal/<target_user_id>/sources/<source_id>/test-connection', methods=['POST'])
+    @bp.route('/api/admin/file-sync/personal/<target_user_id>/sources/<source_id>/test-connection', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -310,7 +310,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/admin/file-sync/personal/<target_user_id>/sources/<source_id>', methods=['DELETE'])
+    @bp.route('/api/admin/file-sync/personal/<target_user_id>/sources/<source_id>', methods=['DELETE'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -322,7 +322,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/admin/file-sync/personal/<target_user_id>/sources/<source_id>/sync', methods=['POST'])
+    @bp.route('/api/admin/file-sync/personal/<target_user_id>/sources/<source_id>/sync', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -334,7 +334,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/admin/file-sync/personal/<target_user_id>/sources/<source_id>/runs', methods=['GET'])
+    @bp.route('/api/admin/file-sync/personal/<target_user_id>/sources/<source_id>/runs', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -346,7 +346,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/admin/file-sync/group/<group_id>/sources', methods=['GET'])
+    @bp.route('/api/admin/file-sync/group/<group_id>/sources', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -358,7 +358,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/admin/file-sync/group/<group_id>/sources', methods=['POST'])
+    @bp.route('/api/admin/file-sync/group/<group_id>/sources', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -370,7 +370,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/admin/file-sync/group/<group_id>/sources/test-connection', methods=['POST'])
+    @bp.route('/api/admin/file-sync/group/<group_id>/sources/test-connection', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -382,7 +382,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/admin/file-sync/group/<group_id>/sources/<source_id>', methods=['PATCH'])
+    @bp.route('/api/admin/file-sync/group/<group_id>/sources/<source_id>', methods=['PATCH'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -394,7 +394,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/admin/file-sync/group/<group_id>/sources/<source_id>/test-connection', methods=['POST'])
+    @bp.route('/api/admin/file-sync/group/<group_id>/sources/<source_id>/test-connection', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -406,7 +406,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/admin/file-sync/group/<group_id>/sources/<source_id>', methods=['DELETE'])
+    @bp.route('/api/admin/file-sync/group/<group_id>/sources/<source_id>', methods=['DELETE'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -418,7 +418,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/admin/file-sync/group/<group_id>/sources/<source_id>/sync', methods=['POST'])
+    @bp.route('/api/admin/file-sync/group/<group_id>/sources/<source_id>/sync', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -430,7 +430,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/admin/file-sync/group/<group_id>/sources/<source_id>/runs', methods=['GET'])
+    @bp.route('/api/admin/file-sync/group/<group_id>/sources/<source_id>/runs', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -442,7 +442,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/admin/file-sync/public/<public_workspace_id>/sources', methods=['GET'])
+    @bp.route('/api/admin/file-sync/public/<public_workspace_id>/sources', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -454,7 +454,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/admin/file-sync/public/<public_workspace_id>/sources', methods=['POST'])
+    @bp.route('/api/admin/file-sync/public/<public_workspace_id>/sources', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -466,7 +466,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/admin/file-sync/public/<public_workspace_id>/sources/test-connection', methods=['POST'])
+    @bp.route('/api/admin/file-sync/public/<public_workspace_id>/sources/test-connection', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -478,7 +478,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/admin/file-sync/public/<public_workspace_id>/sources/<source_id>', methods=['PATCH'])
+    @bp.route('/api/admin/file-sync/public/<public_workspace_id>/sources/<source_id>', methods=['PATCH'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -490,7 +490,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/admin/file-sync/public/<public_workspace_id>/sources/<source_id>/test-connection', methods=['POST'])
+    @bp.route('/api/admin/file-sync/public/<public_workspace_id>/sources/<source_id>/test-connection', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -502,7 +502,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/admin/file-sync/public/<public_workspace_id>/sources/<source_id>', methods=['DELETE'])
+    @bp.route('/api/admin/file-sync/public/<public_workspace_id>/sources/<source_id>', methods=['DELETE'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -514,7 +514,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/admin/file-sync/public/<public_workspace_id>/sources/<source_id>/sync', methods=['POST'])
+    @bp.route('/api/admin/file-sync/public/<public_workspace_id>/sources/<source_id>/sync', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -526,7 +526,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/admin/file-sync/public/<public_workspace_id>/sources/<source_id>/runs', methods=['GET'])
+    @bp.route('/api/admin/file-sync/public/<public_workspace_id>/sources/<source_id>/runs', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -538,7 +538,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/personal/sources', methods=['GET'])
+    @bp.route('/api/file-sync/personal/sources', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -550,7 +550,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/<scope_type>/sources/browse', methods=['POST'])
+    @bp.route('/api/file-sync/<scope_type>/sources/browse', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -567,7 +567,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/<scope_type>/sources/<source_id>/browse', methods=['POST'])
+    @bp.route('/api/file-sync/<scope_type>/sources/<source_id>/browse', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -584,7 +584,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/public/<public_workspace_id>/sources/browse', methods=['POST'])
+    @bp.route('/api/file-sync/public/<public_workspace_id>/sources/browse', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -596,7 +596,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/public/<public_workspace_id>/sources/<source_id>/browse', methods=['POST'])
+    @bp.route('/api/file-sync/public/<public_workspace_id>/sources/<source_id>/browse', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -608,7 +608,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/personal/sources', methods=['POST'])
+    @bp.route('/api/file-sync/personal/sources', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -620,7 +620,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/personal/sources/test-connection', methods=['POST'])
+    @bp.route('/api/file-sync/personal/sources/test-connection', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -632,7 +632,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/personal/sources/<source_id>', methods=['PATCH'])
+    @bp.route('/api/file-sync/personal/sources/<source_id>', methods=['PATCH'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -644,7 +644,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/personal/sources/<source_id>/test-connection', methods=['POST'])
+    @bp.route('/api/file-sync/personal/sources/<source_id>/test-connection', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -656,7 +656,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/personal/sources/<source_id>', methods=['DELETE'])
+    @bp.route('/api/file-sync/personal/sources/<source_id>', methods=['DELETE'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -668,7 +668,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/personal/sources/<source_id>/sync', methods=['POST'])
+    @bp.route('/api/file-sync/personal/sources/<source_id>/sync', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -680,7 +680,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/personal/sources/<source_id>/runs', methods=['GET'])
+    @bp.route('/api/file-sync/personal/sources/<source_id>/runs', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -692,7 +692,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/personal/sources/<source_id>/ignore-path', methods=['POST'])
+    @bp.route('/api/file-sync/personal/sources/<source_id>/ignore-path', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -704,7 +704,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/group/sources', methods=['GET'])
+    @bp.route('/api/file-sync/group/sources', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -716,7 +716,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/group/sources', methods=['POST'])
+    @bp.route('/api/file-sync/group/sources', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -728,7 +728,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/group/sources/test-connection', methods=['POST'])
+    @bp.route('/api/file-sync/group/sources/test-connection', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -740,7 +740,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/group/sources/<source_id>', methods=['PATCH'])
+    @bp.route('/api/file-sync/group/sources/<source_id>', methods=['PATCH'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -752,7 +752,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/group/sources/<source_id>/test-connection', methods=['POST'])
+    @bp.route('/api/file-sync/group/sources/<source_id>/test-connection', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -764,7 +764,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/group/sources/<source_id>', methods=['DELETE'])
+    @bp.route('/api/file-sync/group/sources/<source_id>', methods=['DELETE'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -776,7 +776,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/group/sources/<source_id>/sync', methods=['POST'])
+    @bp.route('/api/file-sync/group/sources/<source_id>/sync', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -788,7 +788,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/group/sources/<source_id>/runs', methods=['GET'])
+    @bp.route('/api/file-sync/group/sources/<source_id>/runs', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -800,7 +800,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/group/sources/<source_id>/ignore-path', methods=['POST'])
+    @bp.route('/api/file-sync/group/sources/<source_id>/ignore-path', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -812,7 +812,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/public/<public_workspace_id>/sources', methods=['GET'])
+    @bp.route('/api/file-sync/public/<public_workspace_id>/sources', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -824,7 +824,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/public/<public_workspace_id>/sources', methods=['POST'])
+    @bp.route('/api/file-sync/public/<public_workspace_id>/sources', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -836,7 +836,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/public/<public_workspace_id>/sources/test-connection', methods=['POST'])
+    @bp.route('/api/file-sync/public/<public_workspace_id>/sources/test-connection', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -848,7 +848,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/public/<public_workspace_id>/sources/<source_id>', methods=['PATCH'])
+    @bp.route('/api/file-sync/public/<public_workspace_id>/sources/<source_id>', methods=['PATCH'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -860,7 +860,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/public/<public_workspace_id>/sources/<source_id>/test-connection', methods=['POST'])
+    @bp.route('/api/file-sync/public/<public_workspace_id>/sources/<source_id>/test-connection', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -872,7 +872,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/public/<public_workspace_id>/sources/<source_id>', methods=['DELETE'])
+    @bp.route('/api/file-sync/public/<public_workspace_id>/sources/<source_id>', methods=['DELETE'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -884,7 +884,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/public/<public_workspace_id>/sources/<source_id>/sync', methods=['POST'])
+    @bp.route('/api/file-sync/public/<public_workspace_id>/sources/<source_id>/sync', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -896,7 +896,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/public/<public_workspace_id>/sources/<source_id>/runs', methods=['GET'])
+    @bp.route('/api/file-sync/public/<public_workspace_id>/sources/<source_id>/runs', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -908,7 +908,7 @@ def register_route_backend_file_sync(app):
         except Exception as error:
             return _map_exception(error)
 
-    @app.route('/api/file-sync/public/<public_workspace_id>/sources/<source_id>/ignore-path', methods=['POST'])
+    @bp.route('/api/file-sync/public/<public_workspace_id>/sources/<source_id>/ignore-path', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required

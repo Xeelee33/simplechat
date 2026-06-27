@@ -65,12 +65,12 @@ def _require_active_public_workspace_response(user_id, allowed_roles=PUBLIC_WORK
 
     return active_ws, ws_doc, role, None
 
-def register_route_backend_public_documents(app):
+def register_route_backend_public_documents(bp):
     """
     Provides backend routes for public-workspace–scoped document management
     """
 
-    @app.route('/api/public_documents/upload', methods=['POST'])
+    @bp.route('/api/public_documents/upload', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -158,7 +158,7 @@ def register_route_backend_public_documents(app):
             'errors': errors
         }), status
 
-    @app.route('/api/public_documents', methods=['GET'])
+    @bp.route('/api/public_documents', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -280,7 +280,7 @@ def register_route_backend_public_documents(app):
             'needs_legacy_update': legacy_count > 0
         }), 200
 
-    @app.route('/api/public_workspace_documents', methods=['GET'])
+    @bp.route('/api/public_workspace_documents', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -334,7 +334,7 @@ def register_route_backend_public_documents(app):
             'workspace_name': 'All Public Workspaces'
         }), 200
 
-    @app.route('/api/public_documents/<doc_id>', methods=['GET'])
+    @bp.route('/api/public_documents/<doc_id>', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -349,7 +349,7 @@ def register_route_backend_public_documents(app):
             return error_response
         return get_document(user_id=user_id, document_id=doc_id, public_workspace_id=active_ws)
 
-    @app.route('/api/public_workspace_documents/<document_id>/versions', methods=['GET'])
+    @bp.route('/api/public_workspace_documents/<document_id>/versions', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -411,7 +411,7 @@ def register_route_backend_public_documents(app):
             return None, None, (jsonify({'error': 'Document not found or access denied'}), 404)
         return active_ws, document_record, None
 
-    @app.route('/api/public_documents/<doc_id>/download', methods=['GET'])
+    @bp.route('/api/public_documents/<doc_id>/download', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -437,7 +437,7 @@ def register_route_backend_public_documents(app):
             )
             return jsonify({'error': 'Unable to download document'}), 500
 
-    @app.route('/api/public_documents/download', methods=['POST'])
+    @bp.route('/api/public_documents/download', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -495,7 +495,7 @@ def register_route_backend_public_documents(app):
             )
             return jsonify({'error': 'Unable to download selected documents'}), 500
 
-    @app.route('/api/public_documents/<doc_id>', methods=['PATCH'])
+    @bp.route('/api/public_documents/<doc_id>', methods=['PATCH'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -565,7 +565,7 @@ def register_route_backend_public_documents(app):
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
-    @app.route('/api/public_documents/<doc_id>', methods=['DELETE'])
+    @bp.route('/api/public_documents/<doc_id>', methods=['DELETE'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -619,7 +619,7 @@ def register_route_backend_public_documents(app):
         except Exception as e:
             return jsonify({'error':str(e)}), 500
 
-    @app.route('/api/public_documents/<doc_id>/approve-generated-artifact', methods=['POST'])
+    @bp.route('/api/public_documents/<doc_id>/approve-generated-artifact', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -727,7 +727,7 @@ def register_route_backend_public_documents(app):
         except Exception as e:
             return jsonify({'error': f'Error approving generated artifact: {str(e)}'}), 500
 
-    @app.route('/api/public_documents/<doc_id>/deny-generated-artifact', methods=['POST'])
+    @bp.route('/api/public_documents/<doc_id>/deny-generated-artifact', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -800,7 +800,7 @@ def register_route_backend_public_documents(app):
         except Exception as e:
             return jsonify({'error': f'Error denying generated artifact: {str(e)}'}), 500
 
-    @app.route('/api/public_documents/<doc_id>/cancel-generated-artifact', methods=['POST'])
+    @bp.route('/api/public_documents/<doc_id>/cancel-generated-artifact', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -852,7 +852,7 @@ def register_route_backend_public_documents(app):
         except Exception as e:
             return jsonify({'error': f'Error canceling generated artifact: {str(e)}'}), 500
 
-    @app.route('/api/public_documents/<doc_id>/extract_metadata', methods=['POST'])
+    @bp.route('/api/public_documents/<doc_id>/extract_metadata', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -872,7 +872,7 @@ def register_route_backend_public_documents(app):
         executor.submit(process_metadata_extraction_background, document_id=doc_id, user_id=user_id, public_workspace_id=active_ws)
         return jsonify({'message':'Extraction queued'}), 200
 
-    @app.route('/api/public_documents/reprocess_extraction', methods=['POST'])
+    @bp.route('/api/public_documents/reprocess_extraction', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -960,7 +960,7 @@ def register_route_backend_public_documents(app):
             'errors': errors,
         }), status_code
 
-    @app.route('/api/public_documents/upgrade_legacy', methods=['POST'])
+    @bp.route('/api/public_documents/upgrade_legacy', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -979,7 +979,7 @@ def register_route_backend_public_documents(app):
         except Exception as e:
             return jsonify({'error':str(e)}), 500
 
-    @app.route('/api/public_workspace_documents/tags', methods=['GET'])
+    @bp.route('/api/public_workspace_documents/tags', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1019,7 +1019,7 @@ def register_route_backend_public_documents(app):
         merged = sorted(all_tags.values(), key=lambda t: t['name'])
         return jsonify({'tags': merged}), 200
 
-    @app.route('/api/public_workspace_documents/tags', methods=['POST'])
+    @bp.route('/api/public_workspace_documents/tags', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1090,7 +1090,7 @@ def register_route_backend_public_documents(app):
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
-    @app.route('/api/public_workspace_documents/bulk-tag', methods=['POST'])
+    @bp.route('/api/public_workspace_documents/bulk-tag', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1214,7 +1214,7 @@ def register_route_backend_public_documents(app):
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
-    @app.route('/api/public_workspace_documents/tags/<tag_name>', methods=['PATCH'])
+    @bp.route('/api/public_workspace_documents/tags/<tag_name>', methods=['PATCH'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1338,7 +1338,7 @@ def register_route_backend_public_documents(app):
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
-    @app.route('/api/public_workspace_documents/tags/<tag_name>', methods=['DELETE'])
+    @bp.route('/api/public_workspace_documents/tags/<tag_name>', methods=['DELETE'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required

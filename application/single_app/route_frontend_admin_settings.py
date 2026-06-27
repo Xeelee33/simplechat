@@ -5,6 +5,8 @@ import re
 from config import *
 from functions_documents import *
 from functions_authentication import *
+from flask import current_app
+
 from functions_keyvault import keyvault_model_endpoint_cleanup_helper, keyvault_model_endpoint_delete_helper, keyvault_model_endpoint_save_helper, redact_model_endpoint_secret_values
 from functions_settings import *
 from functions_file_sync import FILE_SYNC_DEFAULTS, get_file_sync_config
@@ -108,8 +110,8 @@ def normalize_agents_page_text(value, fallback, max_length):
         candidate = fallback
     return candidate[:max_length]
 
-def register_route_frontend_admin_settings(app):
-    @app.route('/admin/settings', methods=['GET', 'POST'])
+def register_route_frontend_admin_settings(bp):
+    @bp.route('/admin/settings', methods=['GET', 'POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -475,7 +477,7 @@ def register_route_frontend_admin_settings(app):
                  log_event(f"Error retrieving GPT deployments: {e}", level=logging.ERROR)
 
             # Check for application updates
-            current_version = app.config['VERSION']
+            current_version = current_app.config['VERSION']
             update_available = False
             latest_version = None
             download_url = "https://github.com/microsoft/simplechat/releases"
@@ -1649,7 +1651,7 @@ def register_route_frontend_admin_settings(app):
             if cosmos_throughput_validation_errors:
                 for validation_error in cosmos_throughput_validation_errors:
                     flash(validation_error, 'danger')
-                return redirect(url_for('admin_settings'))
+                return redirect(url_for('frontend_admin_settings.admin_settings'))
 
             cosmos_throughput_settings = normalize_cosmos_throughput_settings(cosmos_throughput_candidate_settings)
 
@@ -2386,7 +2388,7 @@ def register_route_frontend_admin_settings(app):
 
 
             # Redirect back to settings page
-            return redirect(url_for('admin_settings'))
+            return redirect(url_for('frontend_admin_settings.admin_settings'))
 
         # Fallback if not GET or POST (shouldn't happen with standard routing)
-        return redirect(url_for('admin_settings'))
+        return redirect(url_for('frontend_admin_settings.admin_settings'))

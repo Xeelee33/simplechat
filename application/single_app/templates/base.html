@@ -252,7 +252,7 @@
 
 {% set nav_layout = user_settings.get('settings', {}).get('navLayout') %}
 {% set is_sidebar_layout = nav_layout == 'sidebar' or (not nav_layout and app_settings.enable_left_nav_default) %}
-{% set is_chat_page = request.endpoint == 'chats' %}
+{% set is_chat_page = request.endpoint == 'frontend_chats.chats' %}
 <body class="d-flex flex-column min-vh-100{% if app_settings.classification_banner_enabled and app_settings.classification_banner_text %} has-classification-banner{% endif %}{% if is_chat_page %} chat-shell-page{% endif %}{% if is_chat_page and not is_sidebar_layout %} chat-top-nav-shell{% endif %}">
   {% if app_settings.classification_banner_enabled and app_settings.classification_banner_text %}
     <div id="classification-banner"
@@ -711,9 +711,9 @@
       'enabled': idle_timeout_enabled | default(false),
       'timeoutMinutes': idle_timeout_minutes | default(30) | int,
       'warningMinutes': idle_warning_minutes | default(28) | int,
-      'heartbeatUrl': url_for('session_heartbeat'),
-      'localLogoutUrl': url_for('local_logout'),
-      'fullSsoLogoutUrl': url_for('logout')
+      'heartbeatUrl': url_for('session_api.session_heartbeat'),
+      'localLogoutUrl': url_for('frontend_authentication.local_logout'),
+      'fullSsoLogoutUrl': url_for('frontend_authentication.logout')
     } | tojson }};
   </script>
   <script src="{{ url_for('static', filename='js/idle-logout-warning.js') }}"></script>

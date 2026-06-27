@@ -10897,7 +10897,7 @@ def restore_agent_stream_retry_state(agent, retry_state):
         settings.function_choice_behavior = original_behavior
 
 
-def register_route_backend_chats(app):
+def register_route_backend_chats(bp):
     def build_background_stream_response(event_generator_factory, stream_session=None):
         """Run SSE generation in background execution so it survives disconnects."""
         stream_bridge = BackgroundStreamBridge(stream_session=stream_session)
@@ -12194,7 +12194,7 @@ def register_route_backend_chats(app):
             forced_action_type=DOCUMENT_ACTION_TYPE_ANALYZE,
         )
 
-    @app.route('/api/chat/document-action', methods=['POST'])
+    @bp.route('/api/chat/document-action', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -12202,7 +12202,7 @@ def register_route_backend_chats(app):
         payload, status_code = execute_document_action_chat_request()
         return jsonify(payload), status_code
 
-    @app.route('/api/chat/document-action/stream', methods=['POST'])
+    @bp.route('/api/chat/document-action/stream', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -12255,7 +12255,7 @@ def register_route_backend_chats(app):
 
         return build_background_stream_response(generate_document_action_response, stream_session=stream_session)
 
-    @app.route('/api/chat/analyze', methods=['POST'])
+    @bp.route('/api/chat/analyze', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -12263,7 +12263,7 @@ def register_route_backend_chats(app):
         payload, status_code = execute_analyze_chat_request()
         return jsonify(payload), status_code
 
-    @app.route('/api/chat/analyze/stream', methods=['POST'])
+    @bp.route('/api/chat/analyze/stream', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -12316,7 +12316,7 @@ def register_route_backend_chats(app):
 
         return build_background_stream_response(generate_analyze_response, stream_session=stream_session)
 
-    @app.route('/api/chat/image-proposals/generate', methods=['POST'])
+    @bp.route('/api/chat/image-proposals/generate', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -12420,7 +12420,7 @@ def register_route_backend_chats(app):
             )
             return jsonify({'error': error_message}), status_code
 
-    @app.route('/api/chat', methods=['POST'])
+    @bp.route('/api/chat', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -15821,10 +15821,10 @@ def register_route_backend_chats(app):
             )
             return jsonify({
                 'error': f'Internal server error: {str(e)}',
-                'details': error_traceback if app.debug else None
+                'details': error_traceback if current_app.debug else None
             }), 500
 
-    @app.route('/api/chat/stream', methods=['POST'])
+    @bp.route('/api/chat/stream', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -18848,7 +18848,7 @@ def register_route_backend_chats(app):
 
         return build_background_stream_response(generate, stream_session=stream_session)
 
-    @app.route('/api/chat/stream/cancel/<conversation_id>', methods=['POST'])
+    @bp.route('/api/chat/stream/cancel/<conversation_id>', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -18871,7 +18871,7 @@ def register_route_backend_chats(app):
             **stream_status,
         })
 
-    @app.route('/api/chat/stream/status/<conversation_id>', methods=['GET'])
+    @bp.route('/api/chat/stream/status/<conversation_id>', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -18886,7 +18886,7 @@ def register_route_backend_chats(app):
         stream_status['conversation_id'] = conversation_id
         return jsonify(stream_status)
 
-    @app.route('/api/tabular/generated-output/runs/<run_id>', methods=['GET'])
+    @bp.route('/api/tabular/generated-output/runs/<run_id>', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -18901,7 +18901,7 @@ def register_route_backend_chats(app):
             return jsonify({'error': 'Tabular generated-output run not found'}), 404
         return jsonify({'success': True, 'run': run_status})
 
-    @app.route('/api/tabular/generated-output/runs/<run_id>/resume', methods=['POST'])
+    @bp.route('/api/tabular/generated-output/runs/<run_id>/resume', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -18918,7 +18918,7 @@ def register_route_backend_chats(app):
             return jsonify(resume_result), 409
         return jsonify(resume_result)
 
-    @app.route('/api/chat/stream/reattach/<conversation_id>', methods=['GET'])
+    @bp.route('/api/chat/stream/reattach/<conversation_id>', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -18983,7 +18983,7 @@ def register_route_backend_chats(app):
             }
         )
 
-    @app.route('/api/chat/stream/client-event', methods=['POST'])
+    @bp.route('/api/chat/stream/client-event', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -19029,7 +19029,7 @@ def register_route_backend_chats(app):
 
         return jsonify({'success': True, 'event_type': event_type})
 
-    @app.route('/api/message/<message_id>/mask', methods=['POST'])
+    @bp.route('/api/message/<message_id>/mask', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -19143,7 +19143,7 @@ def register_route_backend_chats(app):
             debug_print(f"[MASK API ERROR] Full traceback:\n{error_traceback}")
             return jsonify({
                 'error': f'Internal server error: {str(e)}',
-                'details': error_traceback if app.debug else None
+                'details': error_traceback if current_app.debug else None
             }), 500
 
 

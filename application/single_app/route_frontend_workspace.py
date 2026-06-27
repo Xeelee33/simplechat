@@ -12,8 +12,8 @@ from functions_file_sync import is_file_sync_enabled_for_user
 from functions_source_review import is_url_access_enabled_for_user
 from swagger_wrapper import swagger_route, get_auth_security
 
-def register_route_frontend_workspace(app):
-    @app.route('/workspace', methods=['GET'])
+def register_route_frontend_workspace(bp):
+    @bp.route('/workspace', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -41,7 +41,7 @@ def register_route_frontend_workspace(app):
         file_sync_enabled = is_file_sync_enabled_for_user(settings, user_id, user_info.get('email'), user_info=user_info) if user_id else False
         if not user_id:
             print("User not authenticated.")
-            return redirect(url_for('login'))
+            return redirect(url_for('frontend_authentication.login'))
         
         query = """
             SELECT VALUE COUNT(1)
@@ -137,4 +137,4 @@ def register_route_frontend_workspace(app):
             workspace_governance=workspace_governance
         )
 
-    
+

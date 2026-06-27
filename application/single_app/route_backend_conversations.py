@@ -810,9 +810,9 @@ def _persist_scope_lock_update(conversation_item, conversation_kind, user_id, ne
     return conversation_item
 
 
-def register_route_backend_conversations(app):
+def register_route_backend_conversations(bp):
 
-    @app.route('/api/get_messages', methods=['GET'])
+    @bp.route('/api/get_messages', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -882,7 +882,7 @@ def register_route_backend_conversations(app):
             print(f"ERROR: Failed to get messages: {str(e)}")
             return jsonify({'error': 'Conversation not found'}), 404
 
-    @app.route('/api/image/<image_id>', methods=['GET'])
+    @bp.route('/api/image/<image_id>', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -940,7 +940,7 @@ def register_route_backend_conversations(app):
             traceback.print_exc()
             return jsonify({'error': 'Failed to retrieve image'}), 500
         
-    @app.route('/api/get_conversations', methods=['GET'])
+    @bp.route('/api/get_conversations', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -956,7 +956,7 @@ def register_route_backend_conversations(app):
         }), 200
 
 
-    @app.route('/api/conversations/feed', methods=['GET'])
+    @bp.route('/api/conversations/feed', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -998,7 +998,7 @@ def register_route_backend_conversations(app):
             return jsonify({'error': 'Failed to load conversations'}), 500
 
 
-    @app.route('/api/create_conversation', methods=['POST'])
+    @bp.route('/api/create_conversation', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1018,7 +1018,7 @@ def register_route_backend_conversations(app):
             'title': conversation_item.get('title', 'New Conversation')
         }), 200
     
-    @app.route('/api/conversations/<conversation_id>', methods=['PUT'])
+    @bp.route('/api/conversations/<conversation_id>', methods=['PUT'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1065,7 +1065,7 @@ def register_route_backend_conversations(app):
             print(e)
             return jsonify({'error': 'Failed to update conversation'}), 500
         
-    @app.route('/api/conversations/<conversation_id>', methods=['DELETE'])
+    @bp.route('/api/conversations/<conversation_id>', methods=['DELETE'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1193,7 +1193,7 @@ def register_route_backend_conversations(app):
             "success": True
         }), 200
         
-    @app.route('/api/delete_multiple_conversations', methods=['POST'])
+    @bp.route('/api/delete_multiple_conversations', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1296,7 +1296,7 @@ def register_route_backend_conversations(app):
             "failed_ids": failed_ids
         }), 200
 
-    @app.route('/api/conversations/<conversation_id>/pin', methods=['POST'])
+    @bp.route('/api/conversations/<conversation_id>/pin', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1338,7 +1338,7 @@ def register_route_backend_conversations(app):
             print(f"Error toggling conversation pin: {e}")
             return jsonify({'error': 'Failed to toggle pin status'}), 500
     
-    @app.route('/api/conversations/<conversation_id>/hide', methods=['POST'])
+    @bp.route('/api/conversations/<conversation_id>/hide', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1380,7 +1380,7 @@ def register_route_backend_conversations(app):
             print(f"Error toggling conversation hide: {e}")
             return jsonify({'error': 'Failed to toggle hide status'}), 500
 
-    @app.route('/api/conversations/bulk-pin', methods=['POST'])
+    @bp.route('/api/conversations/bulk-pin', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1438,7 +1438,7 @@ def register_route_backend_conversations(app):
             "action": pin_action
         }), 200
 
-    @app.route('/api/conversations/bulk-hide', methods=['POST'])
+    @bp.route('/api/conversations/bulk-hide', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1496,7 +1496,7 @@ def register_route_backend_conversations(app):
             "action": hide_action
         }), 200
 
-    @app.route('/api/conversations/<conversation_id>/metadata', methods=['GET'])
+    @bp.route('/api/conversations/<conversation_id>/metadata', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1566,7 +1566,7 @@ def register_route_backend_conversations(app):
             print(f"Error retrieving conversation metadata: {e}")
             return jsonify({'error': 'Failed to retrieve conversation metadata'}), 500
 
-    @app.route('/api/conversations/<conversation_id>/mark-read', methods=['POST'])
+    @bp.route('/api/conversations/<conversation_id>/mark-read', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1606,7 +1606,7 @@ def register_route_backend_conversations(app):
             debug_print(f"Error marking conversation {conversation_id} as read: {e}")
             return jsonify({'error': 'Failed to mark conversation as read'}), 500
 
-    @app.route('/api/conversations/<conversation_id>/summary', methods=['POST'])
+    @bp.route('/api/conversations/<conversation_id>/summary', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1723,7 +1723,7 @@ def register_route_backend_conversations(app):
             debug_print(f"Summary generation API error: {exc}")
             return jsonify({'error': 'Summary generation failed'}), 500
 
-    @app.route('/api/conversations/<conversation_id>/scope_lock', methods=['PATCH'])
+    @bp.route('/api/conversations/<conversation_id>/scope_lock', methods=['PATCH'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1772,7 +1772,7 @@ def register_route_backend_conversations(app):
             debug_print(f"Error updating scope lock: {e}")
             return jsonify({'error': 'Failed to update scope lock'}), 500
 
-    @app.route('/api/conversations/classifications', methods=['GET'])
+    @bp.route('/api/conversations/classifications', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1813,7 +1813,7 @@ def register_route_backend_conversations(app):
             print(f"Error fetching classifications: {e}")
             return jsonify({'error': 'Failed to fetch classifications'}), 500
     
-    @app.route('/api/search_conversations', methods=['POST'])
+    @bp.route('/api/search_conversations', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -2017,7 +2017,7 @@ def register_route_backend_conversations(app):
             )
             return jsonify({'error': 'Failed to search conversations'}), 500
     
-    @app.route('/api/user-settings/search-history', methods=['GET'])
+    @bp.route('/api/user-settings/search-history', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -2037,7 +2037,7 @@ def register_route_backend_conversations(app):
             print(f"Error retrieving search history: {e}")
             return jsonify({'error': 'Failed to retrieve search history'}), 500
     
-    @app.route('/api/user-settings/search-history', methods=['POST'])
+    @bp.route('/api/user-settings/search-history', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -2063,7 +2063,7 @@ def register_route_backend_conversations(app):
             print(f"Error saving search to history: {e}")
             return jsonify({'error': 'Failed to save search to history'}), 500
     
-    @app.route('/api/user-settings/search-history', methods=['DELETE'])
+    @bp.route('/api/user-settings/search-history', methods=['DELETE'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -2086,7 +2086,7 @@ def register_route_backend_conversations(app):
             print(f"Error clearing search history: {e}")
             return jsonify({'error': 'Failed to clear search history'}), 500
     
-    @app.route('/api/message/<message_id>', methods=['DELETE'])
+    @bp.route('/api/message/<message_id>', methods=['DELETE'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -2293,7 +2293,7 @@ def register_route_backend_conversations(app):
             import traceback
             traceback.print_exc()
             return jsonify({'error': 'Failed to delete message'}), 500
-    @app.route('/api/message/<message_id>/retry', methods=['POST'])
+    @bp.route('/api/message/<message_id>/retry', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -2507,7 +2507,7 @@ def register_route_backend_conversations(app):
             traceback.print_exc()
             return jsonify({'error': 'Failed to retry message'}), 500
 
-    @app.route('/api/message/<message_id>/edit', methods=['POST'])
+    @bp.route('/api/message/<message_id>/edit', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -2726,7 +2726,7 @@ def register_route_backend_conversations(app):
             traceback.print_exc()
             return jsonify({'error': 'Failed to edit message'}), 500
 
-    @app.route('/api/message/<message_id>/switch-attempt', methods=['POST'])
+    @bp.route('/api/message/<message_id>/switch-attempt', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required

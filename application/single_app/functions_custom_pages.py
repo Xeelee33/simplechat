@@ -293,7 +293,7 @@ def get_custom_pages_nav(settings: Dict[str, Any]) -> List[Dict[str, Any]]:
         if not is_custom_page_authorized(page, roles):
             continue
         if has_app_context():
-            href = url_for("custom_page", slug=page["slug"])
+            href = url_for("custom_pages.custom_page", slug=page["slug"])
         else:
             href = f"/custom/{page['slug']}"
         nav_items.append({

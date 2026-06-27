@@ -247,13 +247,13 @@ def _user_profile_not_found_response():
     return jsonify({'error': 'User not found or access denied'}), 404
 
 
-def register_route_backend_users(app):
+def register_route_backend_users(bp):
     """
     This route will expose GET /api/userSearch?query=<searchTerm> which calls
     Microsoft Graph to find users by displayName, mail, userPrincipalName, etc.
     """
 
-    @app.route("/api/userSearch", methods=["GET"])
+    @bp.route("/api/userSearch", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -315,7 +315,7 @@ def register_route_backend_users(app):
                 "details": error_details
             }), getattr(e.response, 'status_code', 500) # Use response status code if available
 
-    @app.route("/api/user/info/<user_id>", methods=["GET"])
+    @bp.route("/api/user/info/<user_id>", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -368,7 +368,7 @@ def register_route_backend_users(app):
 
         return _user_profile_not_found_response()
 
-    @app.route('/api/user/collaboration-suggestions', methods=['GET'])
+    @bp.route('/api/user/collaboration-suggestions', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -448,7 +448,7 @@ def register_route_backend_users(app):
 
         return jsonify({'results': suggestions[:limit]}), 200
     
-    @app.route('/api/user/settings', methods=['GET', 'POST'])
+    @bp.route('/api/user/settings', methods=['GET', 'POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required # Assuming this decorator confirms a valid user exists
@@ -618,7 +618,7 @@ def register_route_backend_users(app):
             print(f"Error retrieving settings for user {user_id}: {e}")
             return jsonify({"error": "Failed to retrieve user settings"}), 500
 
-    @app.route('/api/user/profile-image/<user_id>', methods=['GET'])
+    @bp.route('/api/user/profile-image/<user_id>', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required

@@ -33,7 +33,7 @@ def _is_foundry_project_endpoint(endpoint):
     return 'services.ai.azure.com' in (endpoint or '').lower()
 
 
-def register_route_backend_models(app):
+def register_route_backend_models(bp):
     """
     Register backend routes for fetching Azure OpenAI models.
     """
@@ -516,7 +516,7 @@ def register_route_backend_models(app):
                 400,
             )
 
-    @app.route('/api/models/gpt', methods=['GET'])
+    @bp.route('/api/models/gpt', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -585,7 +585,7 @@ def register_route_backend_models(app):
         return jsonify({"models": models})
 
 
-    @app.route('/api/models/embedding', methods=['GET'])
+    @bp.route('/api/models/embedding', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -652,7 +652,7 @@ def register_route_backend_models(app):
         return jsonify({"models": models})
 
 
-    @app.route('/api/models/image', methods=['GET'])
+    @bp.route('/api/models/image', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -717,7 +717,7 @@ def register_route_backend_models(app):
         return jsonify({"models": models})
 
 
-    @app.route('/api/models/test-connection', methods=['POST'])
+    @bp.route('/api/models/test-connection', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -800,7 +800,7 @@ def register_route_backend_models(app):
             )
 
 
-    @app.route('/api/models/fetch', methods=['POST'])
+    @bp.route('/api/models/fetch', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -809,7 +809,7 @@ def register_route_backend_models(app):
         return handle_fetch_model_list(scope="global")
 
 
-    @app.route('/api/user/model-endpoints', methods=['GET'])
+    @bp.route('/api/user/model-endpoints', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -827,7 +827,7 @@ def register_route_backend_models(app):
         })
 
 
-    @app.route('/api/user/model-endpoints', methods=['POST'])
+    @bp.route('/api/user/model-endpoints', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -893,7 +893,7 @@ def register_route_backend_models(app):
         return jsonify({"success": True})
 
 
-    @app.route('/api/group/model-endpoints', methods=['GET'])
+    @bp.route('/api/group/model-endpoints', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -921,7 +921,7 @@ def register_route_backend_models(app):
         })
 
 
-    @app.route('/api/group/model-endpoints', methods=['POST'])
+    @bp.route('/api/group/model-endpoints', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -997,7 +997,7 @@ def register_route_backend_models(app):
         return jsonify({"success": True})
 
 
-    @app.route('/api/models/foundry/agents', methods=['POST'])
+    @bp.route('/api/models/foundry/agents', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1091,7 +1091,7 @@ def register_route_backend_models(app):
         })
 
 
-    @app.route('/api/models/test-model', methods=['POST'])
+    @bp.route('/api/models/test-model', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1100,7 +1100,7 @@ def register_route_backend_models(app):
         return handle_test_model_connection(scope="global")
 
 
-    @app.route('/api/user/models/fetch', methods=['POST'])
+    @bp.route('/api/user/models/fetch', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1109,7 +1109,7 @@ def register_route_backend_models(app):
         return handle_fetch_model_list(scope="user")
 
 
-    @app.route('/api/user/models/test-model', methods=['POST'])
+    @bp.route('/api/user/models/test-model', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1118,7 +1118,7 @@ def register_route_backend_models(app):
         return handle_test_model_connection(scope="user")
 
 
-    @app.route('/api/group/models/fetch', methods=['POST'])
+    @bp.route('/api/group/models/fetch', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1138,7 +1138,7 @@ def register_route_backend_models(app):
         return handle_fetch_model_list(scope="group")
 
 
-    @app.route('/api/group/models/test-model', methods=['POST'])
+    @bp.route('/api/group/models/test-model', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required

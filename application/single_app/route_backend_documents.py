@@ -346,8 +346,8 @@ def _find_accessible_citation_document(user_id, document_id, scope_name):
 
     return None
 
-def register_route_backend_documents(app):
-    @app.route('/api/get_file_content', methods=['POST'])
+def register_route_backend_documents(bp):
+    @bp.route('/api/get_file_content', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -510,7 +510,7 @@ def register_route_backend_documents(app):
             add_file_task_to_file_processing_log(document_id=file_id, user_id=user_id, content="Error retrieving file content: " + str(e))
             return jsonify({'error': f'Error retrieving file content: {str(e)}'}), 500
     
-    @app.route('/api/documents/upload', methods=['POST'])
+    @bp.route('/api/documents/upload', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -651,7 +651,7 @@ def register_route_backend_documents(app):
         }), response_status
 
 
-    @app.route('/api/documents', methods=['GET'])
+    @bp.route('/api/documents', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -832,7 +832,7 @@ def register_route_backend_documents(app):
             "needs_legacy_update_check": legacy_count > 0
         }), 200
 
-    @app.route('/api/documents/<document_id>', methods=['GET'])
+    @bp.route('/api/documents/<document_id>', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -844,7 +844,7 @@ def register_route_backend_documents(app):
         
         return get_document(user_id, document_id)
 
-    @app.route('/api/documents/<document_id>/versions', methods=['GET'])
+    @bp.route('/api/documents/<document_id>/versions', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -864,7 +864,7 @@ def register_route_backend_documents(app):
             'versions': versions,
         }), 200
 
-    @app.route('/api/documents/<document_id>/download', methods=['GET'])
+    @bp.route('/api/documents/<document_id>/download', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -892,7 +892,7 @@ def register_route_backend_documents(app):
             )
             return jsonify({'error': 'Unable to download document'}), 500
 
-    @app.route('/api/documents/download', methods=['POST'])
+    @bp.route('/api/documents/download', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -945,7 +945,7 @@ def register_route_backend_documents(app):
             )
             return jsonify({'error': 'Unable to download selected documents'}), 500
 
-    @app.route('/api/documents/<document_id>', methods=['PATCH'])
+    @bp.route('/api/documents/<document_id>', methods=['PATCH'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1091,7 +1091,7 @@ def register_route_backend_documents(app):
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
-    @app.route('/api/documents/<document_id>', methods=['DELETE'])
+    @bp.route('/api/documents/<document_id>', methods=['DELETE'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1162,7 +1162,7 @@ def register_route_backend_documents(app):
         except Exception as e:
             return jsonify({'error': f'Error deleting document: {str(e)}'}), 500
 
-    @app.route('/api/documents/<document_id>/extract_metadata', methods=['POST'])
+    @bp.route('/api/documents/<document_id>/extract_metadata', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1195,7 +1195,7 @@ def register_route_backend_documents(app):
             'document_id': document_id
         }), 200
 
-    @app.route('/api/documents/reprocess_extraction', methods=['POST'])
+    @bp.route('/api/documents/reprocess_extraction', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1258,7 +1258,7 @@ def register_route_backend_documents(app):
             'errors': errors,
         }), status_code
 
-    @app.route("/api/get_citation", methods=["POST"])
+    @bp.route("/api/get_citation", methods=["POST"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1323,7 +1323,7 @@ def register_route_backend_documents(app):
 
         return jsonify({"error": "Citation not found in user, group, or public docs"}), 404
         
-    @app.route('/api/documents/upgrade_legacy', methods=['POST'])
+    @bp.route('/api/documents/upgrade_legacy', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1338,7 +1338,7 @@ def register_route_backend_documents(app):
 
     # ============= TAG MANAGEMENT API ENDPOINTS =============
     
-    @app.route('/api/documents/tags', methods=['GET'])
+    @bp.route('/api/documents/tags', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1357,7 +1357,7 @@ def register_route_backend_documents(app):
         except Exception as e:
             return jsonify({'error': str(e)}), 500
     
-    @app.route('/api/documents/tags', methods=['POST'])
+    @bp.route('/api/documents/tags', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1442,7 +1442,7 @@ def register_route_backend_documents(app):
         except Exception as e:
             return jsonify({'error': str(e)}), 500
     
-    @app.route('/api/documents/bulk-tag', methods=['POST'])
+    @bp.route('/api/documents/bulk-tag', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1589,7 +1589,7 @@ def register_route_backend_documents(app):
         except Exception as e:
             return jsonify({'error': str(e)}), 500
     
-    @app.route('/api/documents/tags/<tag_name>', methods=['PATCH'])
+    @bp.route('/api/documents/tags/<tag_name>', methods=['PATCH'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1775,7 +1775,7 @@ def register_route_backend_documents(app):
             traceback.print_exc()
             return jsonify({'error': str(e)}), 500
     
-    @app.route('/api/documents/tags/<tag_name>', methods=['DELETE'])
+    @bp.route('/api/documents/tags/<tag_name>', methods=['DELETE'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1869,7 +1869,7 @@ def register_route_backend_documents(app):
             return jsonify({'error': str(e)}), 500
 
     # ============= DOCUMENT SHARING API ENDPOINTS =============
-    @app.route('/api/documents/<document_id>/share', methods=['POST'])
+    @bp.route('/api/documents/<document_id>/share', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1923,7 +1923,7 @@ def register_route_backend_documents(app):
         except Exception as e:
             return jsonify({'error': f'Error sharing document: {str(e)}'}), 500
 
-    @app.route('/api/documents/<document_id>/unshare', methods=['DELETE'])
+    @bp.route('/api/documents/<document_id>/unshare', methods=['DELETE'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1963,7 +1963,7 @@ def register_route_backend_documents(app):
         except Exception as e:
             return jsonify({'error': f'Error unsharing document: {str(e)}'}), 500
 
-    @app.route('/api/documents/<document_id>/shared-users', methods=['GET'])
+    @bp.route('/api/documents/<document_id>/shared-users', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -2032,7 +2032,7 @@ def register_route_backend_documents(app):
         except Exception as e:
             return jsonify({'error': f'Error getting shared users: {str(e)}'}), 500
 
-    @app.route('/api/documents/<document_id>/remove-self', methods=['DELETE'])
+    @bp.route('/api/documents/<document_id>/remove-self', methods=['DELETE'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -2083,7 +2083,7 @@ def register_route_backend_documents(app):
             debug_print(f"[ERROR] /api/documents/{document_id}/remove-self: {e}", flush=True)
             return jsonify({'error': f'Error removing from shared document: {str(e)}'}), 500
 
-    @app.route('/api/documents/<document_id>/approve-share', methods=['POST'])
+    @bp.route('/api/documents/<document_id>/approve-share', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required

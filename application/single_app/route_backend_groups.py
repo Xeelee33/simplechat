@@ -30,12 +30,12 @@ from functions_settings import (
 )
 from swagger_wrapper import swagger_route, get_auth_security
 
-def register_route_backend_groups(app):
+def register_route_backend_groups(bp):
     """
     Register all group-related API endpoints under '/api/groups/...'
     """
 
-    @app.route("/api/groups/discover", methods=["GET"])
+    @bp.route("/api/groups/discover", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -84,7 +84,7 @@ def register_route_backend_groups(app):
 
         return jsonify(results), 200
 
-    @app.route("/api/groups", methods=["GET"])
+    @bp.route("/api/groups", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -167,7 +167,7 @@ def register_route_backend_groups(app):
             return jsonify({"error": f"An error occurred while fetching your groups: {str(e)}"}), 500
 
 
-    @app.route("/api/groups", methods=["POST"])
+    @bp.route("/api/groups", methods=["POST"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -192,7 +192,7 @@ def register_route_backend_groups(app):
         except Exception as ex:
             return jsonify({"error": str(ex)}), 400
 
-    @app.route("/api/groups/<group_id>", methods=["GET"])
+    @bp.route("/api/groups/<group_id>", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -233,7 +233,7 @@ def register_route_backend_groups(app):
 
         return jsonify(response_doc), 200
 
-    @app.route("/api/groups/<group_id>/download-settings", methods=["PATCH"])
+    @bp.route("/api/groups/<group_id>/download-settings", methods=["PATCH"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -272,7 +272,7 @@ def register_route_backend_groups(app):
             "disable_file_downloads": group_doc["disable_file_downloads"],
         }), 200
 
-    @app.route("/api/groups/<group_id>", methods=["DELETE"])
+    @bp.route("/api/groups/<group_id>", methods=["DELETE"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -297,7 +297,7 @@ def register_route_backend_groups(app):
         delete_group(group_id)
         return jsonify({"message": "Group deleted successfully"}), 200
 
-    @app.route("/api/groups/<group_id>", methods=["PATCH", "PUT"])
+    @bp.route("/api/groups/<group_id>", methods=["PATCH", "PUT"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -339,7 +339,7 @@ def register_route_backend_groups(app):
 
         return jsonify({"message": "Group updated", "id": group_id}), 200
 
-    @app.route("/api/groups/<group_id>/logo", methods=["GET"])
+    @bp.route("/api/groups/<group_id>/logo", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -371,7 +371,7 @@ def register_route_backend_groups(app):
             download_name="group-logo.png",
         )
 
-    @app.route("/api/groups/<group_id>/logo", methods=["POST"])
+    @bp.route("/api/groups/<group_id>/logo", methods=["POST"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -417,7 +417,7 @@ def register_route_backend_groups(app):
             "logoVersion": group_doc["logoVersion"],
         }), 200
 
-    @app.route("/api/groups/setActive", methods=["PATCH"])
+    @bp.route("/api/groups/setActive", methods=["PATCH"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -447,7 +447,7 @@ def register_route_backend_groups(app):
 
         return jsonify({"message": f"Active group set to {group_id}"}), 200
 
-    @app.route("/api/groups/<group_id>/requests", methods=["POST"])
+    @bp.route("/api/groups/<group_id>/requests", methods=["POST"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -485,7 +485,7 @@ def register_route_backend_groups(app):
 
         return jsonify({"message": "Membership request created"}), 201
 
-    @app.route("/api/groups/<group_id>/requests", methods=["GET"])
+    @bp.route("/api/groups/<group_id>/requests", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -509,7 +509,7 @@ def register_route_backend_groups(app):
 
         return jsonify(group_doc.get("pendingUsers", [])), 200
 
-    @app.route("/api/groups/<group_id>/requests/<request_id>", methods=["PATCH"])
+    @bp.route("/api/groups/<group_id>/requests/<request_id>", methods=["PATCH"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -560,7 +560,7 @@ def register_route_backend_groups(app):
 
         return jsonify({"message": msg}), 200
 
-    @app.route("/api/groups/<group_id>/members", methods=["POST"])
+    @bp.route("/api/groups/<group_id>/members", methods=["POST"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -588,7 +588,7 @@ def register_route_backend_groups(app):
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
 
-    @app.route("/api/groups/<group_id>/members/<member_id>", methods=["DELETE"])
+    @bp.route("/api/groups/<group_id>/members/<member_id>", methods=["DELETE"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -711,7 +711,7 @@ def register_route_backend_groups(app):
                 return jsonify({"error": "User not found in group"}), 404
 
 
-    @app.route("/api/groups/<group_id>/members/<member_id>", methods=["PATCH"])
+    @bp.route("/api/groups/<group_id>/members/<member_id>", methods=["PATCH"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -813,7 +813,7 @@ def register_route_backend_groups(app):
 
         return jsonify({"message": f"User {member_id} updated to {new_role}"}), 200
 
-    @app.route("/api/groups/<group_id>/members", methods=["GET"])
+    @bp.route("/api/groups/<group_id>/members", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -865,7 +865,7 @@ def register_route_backend_groups(app):
 
         return jsonify(results), 200
 
-    @app.route("/api/groups/<group_id>/transferOwnership", methods=["PATCH"])
+    @bp.route("/api/groups/<group_id>/transferOwnership", methods=["PATCH"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -938,7 +938,7 @@ def register_route_backend_groups(app):
 
         return jsonify({"message": "Ownership transferred successfully"}), 200
 
-    @app.route("/api/groups/<group_id>/fileCount", methods=["GET"])
+    @bp.route("/api/groups/<group_id>/fileCount", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -978,7 +978,7 @@ def register_route_backend_groups(app):
 
         return jsonify({ "fileCount": file_count }), 200
 
-    @app.route("/api/groups/<group_id>/activity", methods=["GET"])
+    @bp.route("/api/groups/<group_id>/activity", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1038,7 +1038,7 @@ def register_route_backend_groups(app):
         
         return jsonify(activities), 200
 
-    @app.route("/api/groups/<group_id>/stats", methods=["GET"])
+    @bp.route("/api/groups/<group_id>/stats", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required

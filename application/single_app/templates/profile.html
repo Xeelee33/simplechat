@@ -810,7 +810,7 @@
                 </div>
             </div>
             {% if app_settings.enable_support_menu and app_settings.enable_support_latest_features and app_settings.support_latest_features_has_visible_items %}
-            <a class="btn btn-outline-primary btn-sm" href="{{ url_for('support_latest_features') }}#guided_tutorials">
+            <a class="btn btn-outline-primary btn-sm" href="{{ url_for('frontend_support.support_latest_features') }}#guided_tutorials">
                 <i class="bi bi-stars me-1"></i>View Latest Feature Notes
             </a>
             {% endif %}

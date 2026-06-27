@@ -533,8 +533,8 @@ def _stream_group_workflow_activity(user_id, group_id, conversation_id='', workf
         time.sleep(0.5)
 
 
-def register_route_backend_workflows(app):
-    @app.route('/api/user/workflows', methods=['GET'])
+def register_route_backend_workflows(bp):
+    @bp.route('/api/user/workflows', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -545,7 +545,7 @@ def register_route_backend_workflows(app):
         return jsonify({'workflows': get_personal_workflows(user_id)})
 
 
-    @app.route('/api/user/workflows/file-sync-sources', methods=['GET'])
+    @bp.route('/api/user/workflows/file-sync-sources', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -565,7 +565,7 @@ def register_route_backend_workflows(app):
             return jsonify({'error': 'Unable to load File Sync sources right now.'}), 500
 
 
-    @app.route('/api/user/workflows', methods=['POST'])
+    @bp.route('/api/user/workflows', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -612,7 +612,7 @@ def register_route_backend_workflows(app):
         return jsonify({'success': True, 'workflow': workflow}), 201 if is_create else 200
 
 
-    @app.route('/api/user/workflows/<workflow_id>', methods=['DELETE'])
+    @bp.route('/api/user/workflows/<workflow_id>', methods=['DELETE'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -636,7 +636,7 @@ def register_route_backend_workflows(app):
         return jsonify({'success': True})
 
 
-    @app.route('/api/user/workflows/<workflow_id>/runs', methods=['GET'])
+    @bp.route('/api/user/workflows/<workflow_id>/runs', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -654,7 +654,7 @@ def register_route_backend_workflows(app):
         })
 
 
-    @app.route('/api/user/workflows/<workflow_id>/runs/<run_id>/items', methods=['GET'])
+    @bp.route('/api/user/workflows/<workflow_id>/runs/<run_id>/items', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -677,7 +677,7 @@ def register_route_backend_workflows(app):
         })
 
 
-    @app.route('/api/user/workflows/<workflow_id>/runs/<run_id>/resume-failed', methods=['POST'])
+    @bp.route('/api/user/workflows/<workflow_id>/runs/<run_id>/resume-failed', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -746,7 +746,7 @@ def register_route_backend_workflows(app):
             release_distributed_task_lock(lock_document)
 
 
-    @app.route('/api/group/workflows', methods=['GET'])
+    @bp.route('/api/group/workflows', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -765,7 +765,7 @@ def register_route_backend_workflows(app):
             return jsonify({'error': str(exc)}), 403
 
 
-    @app.route('/api/group/workflows/file-sync-sources', methods=['GET'])
+    @bp.route('/api/group/workflows/file-sync-sources', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -793,7 +793,7 @@ def register_route_backend_workflows(app):
             return jsonify({'error': 'Unable to load File Sync sources right now.'}), 500
 
 
-    @app.route('/api/group/workflows/agents', methods=['GET'])
+    @bp.route('/api/group/workflows/agents', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -820,7 +820,7 @@ def register_route_backend_workflows(app):
             return jsonify({'error': 'Unable to load group workflow agents right now.'}), 500
 
 
-    @app.route('/api/group/workflows', methods=['POST'])
+    @bp.route('/api/group/workflows', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -879,7 +879,7 @@ def register_route_backend_workflows(app):
         return jsonify({'success': True, 'workflow': workflow}), 201 if is_create else 200
 
 
-    @app.route('/api/group/workflows/<workflow_id>', methods=['DELETE'])
+    @bp.route('/api/group/workflows/<workflow_id>', methods=['DELETE'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -914,7 +914,7 @@ def register_route_backend_workflows(app):
         return jsonify({'success': True})
 
 
-    @app.route('/api/group/workflows/<workflow_id>/runs', methods=['GET'])
+    @bp.route('/api/group/workflows/<workflow_id>/runs', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -941,7 +941,7 @@ def register_route_backend_workflows(app):
         })
 
 
-    @app.route('/api/group/workflows/<workflow_id>/runs/<run_id>/items', methods=['GET'])
+    @bp.route('/api/group/workflows/<workflow_id>/runs/<run_id>/items', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -973,7 +973,7 @@ def register_route_backend_workflows(app):
         })
 
 
-    @app.route('/api/group/workflows/<workflow_id>/runs/<run_id>/resume-failed', methods=['POST'])
+    @bp.route('/api/group/workflows/<workflow_id>/runs/<run_id>/resume-failed', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1059,7 +1059,7 @@ def register_route_backend_workflows(app):
             release_distributed_task_lock(lock_document)
 
 
-    @app.route('/api/group/workflows/activity', methods=['GET'])
+    @bp.route('/api/group/workflows/activity', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1102,7 +1102,7 @@ def register_route_backend_workflows(app):
             return jsonify({'error': 'Unable to load workflow activity right now.'}), 500
 
 
-    @app.route('/api/group/workflows/activity/stream', methods=['GET'])
+    @bp.route('/api/group/workflows/activity/stream', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1161,7 +1161,7 @@ def register_route_backend_workflows(app):
         )
 
 
-    @app.route('/api/group/workflows/<workflow_id>/run', methods=['POST'])
+    @bp.route('/api/group/workflows/<workflow_id>/run', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1223,7 +1223,7 @@ def register_route_backend_workflows(app):
             release_distributed_task_lock(lock_document)
 
 
-    @app.route('/api/user/workflows/activity', methods=['GET'])
+    @bp.route('/api/user/workflows/activity', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1262,7 +1262,7 @@ def register_route_backend_workflows(app):
             return jsonify({'error': 'Unable to load workflow activity right now.'}), 500
 
 
-    @app.route('/api/user/workflows/activity/stream', methods=['GET'])
+    @bp.route('/api/user/workflows/activity/stream', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1316,7 +1316,7 @@ def register_route_backend_workflows(app):
         )
 
 
-    @app.route('/api/user/workflows/<workflow_id>/run', methods=['POST'])
+    @bp.route('/api/user/workflows/<workflow_id>/run', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
