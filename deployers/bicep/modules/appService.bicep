@@ -24,6 +24,10 @@ param authenticationType string
 
 @secure()
 param enterpriseAppClientSecret string = ''
+param enableTeamsSso bool = false
+param teamsFrameAncestors string = ''
+param customTeamsOrigins string = ''
+param teamsAppResource string = ''
 param keyVaultUri string
 param enablePrivateNetworking bool
 param appServiceSubnetId string = ''
@@ -127,6 +131,17 @@ resource webApp 'Microsoft.Web/sites@2022-03-01' = {
           name: 'MICROSOFT_PROVIDER_AUTHENTICATION_SECRET'
           value: '@Microsoft.KeyVault(SecretUri=${keyVaultUri}secrets/enterprise-app-client-secret)'
         }
+        { name: 'ENABLE_TEAMS_SSO', value: enableTeamsSso ? 'true' : 'false' }
+        ...(enableTeamsSso
+          ? [
+              { name: 'SESSION_COOKIE_SAMESITE', value: 'None' }
+              { name: 'SESSION_COOKIE_SECURE', value: 'true' }
+              { name: 'TEAMS_SUCCESS_REDIRECT_PATH', value: '/chats' }
+              { name: 'TEAMS_FRAME_ANCESTORS', value: teamsFrameAncestors }
+              { name: 'CUSTOM_TEAMS_ORIGINS', value: customTeamsOrigins }
+              { name: 'TEAMS_APP_RESOURCE', value: teamsAppResource }
+            ]
+          : [])
         { name: 'DOCKER_REGISTRY_SERVER_URL', value: 'https://${acrService.name}${acrDomain}' }
 
         // Only add this setting if authenticationType is 'key'
@@ -237,8 +252,8 @@ resource authSettings 'Microsoft.Web/sites/config@2022-03-01' = {
   parent: webApp
   properties: {
     globalValidation: {
-      requireAuthentication: true
-      unauthenticatedClientAction: 'RedirectToLoginPage'
+      requireAuthentication: !enableTeamsSso
+      unauthenticatedClientAction: enableTeamsSso ? 'AllowAnonymous' : 'RedirectToLoginPage'
       redirectToProvider: 'azureActiveDirectory'
     }
     identityProviders: {

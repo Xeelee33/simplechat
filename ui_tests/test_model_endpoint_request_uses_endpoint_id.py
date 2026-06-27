@@ -1,14 +1,14 @@
 # test_model_endpoint_request_uses_endpoint_id.py
 """
 UI test for model endpoint request identity wiring.
-Version: 0.242.060
-Implemented in: 0.241.179
+Version: 0.250.006
+Implemented in: 0.250.003; updated in 0.250.006
 
 This test ensures the admin multi-endpoint modal exposes the supported
 providers, shows the APIM provider guidance, handles Foundry API version
-selection and project endpoint parsing, exposes model icon picker controls,
-and sends the endpoint ID in the test-model request payload so the backend can
-resolve Key Vault-backed secrets.
+selection and project endpoint parsing, exposes setup guidance and model icon
+picker controls, and sends the endpoint ID in the test-model request payload so
+the backend can resolve Key Vault-backed secrets.
 """
 
 import os
@@ -52,15 +52,34 @@ def test_model_endpoint_request_uses_endpoint_id():
         try:
             page.goto(f"{BASE_URL}/admin/settings", wait_until="networkidle")
             expect(page.locator("#add-model-endpoint-btn")).to_be_visible()
+            expect(page.get_by_test_id("model-endpoint-identity-guide-open")).to_be_visible()
+
+            page.get_by_test_id("model-endpoint-identity-guide-open").click()
+            expect(page.locator("#modelEndpointIdentityGuideModal")).to_be_visible()
+            expect(page.get_by_role("heading", name="Model Endpoint Setup Guide")).to_be_visible()
+            expect(page.get_by_text("Reader", exact=True).first).to_be_visible()
+            expect(page.get_by_text("Cognitive Services OpenAI User", exact=True).first).to_be_visible()
+            page.locator("#modelEndpointIdentityGuideModal button[aria-label='Close']").click()
+            expect(page.locator("#modelEndpointIdentityGuideModal")).to_be_hidden()
 
             page.route("**/api/models/test-model", handle_test_request)
 
             page.locator("#add-model-endpoint-btn").click()
             expect(page.locator("#modelEndpointModal")).to_be_visible()
+            expect(page.get_by_test_id("model-endpoint-inline-guidance-toggle")).to_be_visible()
+
+            page.get_by_test_id("model-endpoint-inline-guidance-toggle").click()
+            expect(page.locator("#model-endpoint-inline-guidance")).to_be_visible()
+            expect(page.get_by_text("Azure OpenAI", exact=True).first).to_be_visible()
+            expect(page.get_by_text("Foundry (classic)", exact=True).first).to_be_visible()
+            expect(page.get_by_text("Use separate endpoints when Grok, Meta/Llama, DeepSeek")).to_be_visible()
 
             provider_options = page.locator("#model-endpoint-provider option").all_text_contents()
             assert provider_options == ["Azure OpenAI", "Foundry (classic)", "New Foundry"]
             expect(page.get_by_text("If using classic Foundry, use Foundry (classic). If using the application-based runtime, use New Foundry.")).to_be_visible()
+
+            page.locator("#model-endpoint-provider").select_option("aifoundry")
+            expect(page.locator("#model-endpoint-openai-api-version")).to_have_value("v1")
 
             page.locator("#model-endpoint-provider").select_option("new_foundry")
             expect(page.locator("#model-endpoint-endpoint-label")).to_have_text("Project Endpoint")

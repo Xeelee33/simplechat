@@ -2,7 +2,7 @@
 # test_idle_logout_timeout.py
 """
 Functional test for idle session auto-logout.
-Version: v0.242.074
+Version: v0.250.001
 Implemented in: v0.240.002
 
 This test ensures that server-side idle timeout enforcement and
@@ -301,7 +301,7 @@ def test_server_idle_timeout_wiring():
     assert has_heartbeat_refresh_call, "Missing get_idle_timeout_settings(get_request_settings()) in session_heartbeat"
 
     required_config_markers = [
-        "VERSION = \"0.242.074\""
+        "VERSION = \"0.250.001\""
     ]
 
     missing_config_markers = [marker for marker in required_config_markers if marker not in config_content]

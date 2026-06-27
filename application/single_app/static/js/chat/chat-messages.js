@@ -2315,6 +2315,65 @@ function normalizeAssistantAgentIcon(iconPayload) {
   return null;
 }
 
+function findModelIconFromChatOptions(fullMessageObject = null) {
+  const modelSelection = fullMessageObject?.metadata?.model_selection || {};
+  const endpointId = String(
+    modelSelection.model_endpoint_id
+    || fullMessageObject?.model_endpoint_id
+    || ''
+  ).trim();
+  const modelId = String(
+    modelSelection.model_id
+    || fullMessageObject?.model_id
+    || ''
+  ).trim();
+  const deploymentName = String(
+    modelSelection.selected_model
+    || fullMessageObject?.model_deployment_name
+    || ''
+  ).trim();
+
+  if (!endpointId && !modelId && !deploymentName) {
+    return null;
+  }
+
+  const options = Array.isArray(window.chatModelOptions) ? window.chatModelOptions : [];
+  const matchingOption = options.find(option => {
+    if (!option || typeof option !== 'object') {
+      return false;
+    }
+
+    const optionEndpointId = String(option.endpoint_id || '').trim();
+    const optionModelId = String(option.model_id || '').trim();
+    const optionDeploymentName = String(option.deployment_name || '').trim();
+    const endpointMatches = !endpointId || optionEndpointId === endpointId;
+    const modelMatches = Boolean(
+      (modelId && optionModelId === modelId)
+      || (deploymentName && optionDeploymentName === deploymentName)
+    );
+
+    return endpointMatches && modelMatches;
+  });
+
+  return normalizeAssistantAgentIcon(matchingOption?.icon || null);
+}
+
+function resolveAssistantModelIcon(fullMessageObject = null) {
+  return normalizeAssistantAgentIcon(fullMessageObject?.model_icon)
+    || normalizeAssistantAgentIcon(fullMessageObject?.metadata?.model_selection?.model_icon)
+    || findModelIconFromChatOptions(fullMessageObject);
+}
+
+function hasAssistantAgentIdentity(fullMessageObject = null) {
+  return Boolean(
+    String(fullMessageObject?.agent_display_name || '').trim()
+    || String(fullMessageObject?.agent_name || '').trim()
+    || String(fullMessageObject?.metadata?.agent_selection?.agent_display_name || '').trim()
+    || String(fullMessageObject?.metadata?.agent_selection?.selected_agent || '').trim()
+    || String(fullMessageObject?.metadata?.agent_selection?.agent_id || '').trim()
+  );
+}
+
 function sanitizeAvatarImageSrc(value) {
   const normalizedValue = String(value || '').trim();
   if (!normalizedValue) {
@@ -2336,20 +2395,22 @@ function sanitizeAvatarImageSrc(value) {
 }
 
 function createAssistantAvatarHtml(fullMessageObject, senderLabel, defaultAvatarSrc) {
-  const iconPayload = normalizeAssistantAgentIcon(
+  const agentIconPayload = normalizeAssistantAgentIcon(
     fullMessageObject?.agent_icon || fullMessageObject?.metadata?.agent_selection?.agent_icon
   );
+  const iconPayload = agentIconPayload || (hasAssistantAgentIdentity(fullMessageObject) ? null : resolveAssistantModelIcon(fullMessageObject));
+  const avatarClass = agentIconPayload ? 'agent-avatar' : 'model-avatar';
   const altText = `${stripHtmlTags(senderLabel || 'AI').replace(/\s+/g, ' ').trim() || 'AI'} Avatar`;
 
   if (iconPayload?.kind === 'image') {
     const safeIconImageSrc = sanitizeAvatarImageSrc(iconPayload.value);
     if (safeIconImageSrc) {
-      return `<img src="${escapeHtml(safeIconImageSrc)}" alt="${escapeHtml(altText)}" class="avatar agent-avatar" />`;
+      return `<img src="${escapeHtml(safeIconImageSrc)}" alt="${escapeHtml(altText)}" class="avatar ${avatarClass}" />`;
     }
   }
 
   if (iconPayload?.kind === 'bootstrap') {
-    return `<div class="avatar avatar-initials agent-avatar" aria-label="${escapeHtml(altText)}"><i class="bi ${iconPayload.value}" aria-hidden="true"></i></div>`;
+    return `<div class="avatar avatar-initials ${avatarClass}" aria-label="${escapeHtml(altText)}"><i class="bi ${iconPayload.value}" aria-hidden="true"></i></div>`;
   }
 
   const safeDefaultAvatarSrc = sanitizeAvatarImageSrc(defaultAvatarSrc) || '/static/images/ai-avatar.png';
@@ -5514,6 +5575,7 @@ function getCurrentModelSelection() {
   let modelId = null;
   let modelEndpointId = null;
   let modelProvider = null;
+  let modelIcon = {};
 
   if (window.appSettings?.enable_multi_model_endpoints && modelSelect) {
     const selectedOption = modelSelect.options[modelSelect.selectedIndex];
@@ -5521,6 +5583,7 @@ function getCurrentModelSelection() {
     modelEndpointId = selectedOption?.dataset?.endpointId || null;
     modelProvider = selectedOption?.dataset?.provider || null;
     modelDeployment = selectedOption?.dataset?.deploymentName || null;
+    modelIcon = parseSafeJsonObject(selectedOption?.dataset?.modelIcon || '');
   }
 
   return {
@@ -5528,6 +5591,7 @@ function getCurrentModelSelection() {
     modelId,
     modelEndpointId,
     modelProvider,
+    modelIcon,
     modelDisplayName: String(
       modelSelect?.options?.[modelSelect.selectedIndex]?.dataset?.displayName
       || modelSelect?.options?.[modelSelect.selectedIndex]?.textContent
@@ -5683,6 +5747,7 @@ function buildCollaborativeModelTarget(option = {}) {
   const modelId = String(dataset.modelId || option.model_id || option.value || '').trim() || null;
   const modelEndpointId = String(dataset.endpointId || option.endpoint_id || '').trim() || null;
   const modelProvider = String(dataset.provider || option.provider || '').trim() || null;
+  const parsedIcon = parseSafeJsonObject(dataset.modelIcon);
   const selectionKey = String(
     dataset.selectionKey
     || option.selection_key
@@ -5702,6 +5767,7 @@ function buildCollaborativeModelTarget(option = {}) {
     model_id: modelId,
     model_endpoint_id: modelEndpointId,
     model_provider: modelProvider,
+    model_icon: Object.keys(parsedIcon).length ? parsedIcon : (option.icon || {}),
     subtitle: modelDeployment && modelDeployment !== displayName
       ? modelDeployment
       : modelProvider
@@ -5860,6 +5926,7 @@ function buildCollaborativeSendContext(finalMessageToSend, conversationId = curr
     messageData.model_id = explicitInvocationTarget.model_id || messageData.model_id;
     messageData.model_endpoint_id = explicitInvocationTarget.model_endpoint_id || messageData.model_endpoint_id;
     messageData.model_provider = explicitInvocationTarget.model_provider || messageData.model_provider;
+    messageData.model_icon = explicitInvocationTarget.model_icon || messageData.model_icon;
   }
 
   const invocationTarget = buildCollaborativeInvocationTarget(messageData, explicitInvocationTarget);
@@ -5883,6 +5950,7 @@ export function buildChatRequestPayload(finalMessageToSend, conversationId = cur
     modelId,
     modelEndpointId,
     modelProvider,
+    modelIcon,
   } = getCurrentModelSelection();
 
   const hybridSearchEnabled = isWorkspaceDocumentSearchEnabled();
@@ -6031,6 +6099,7 @@ export function buildChatRequestPayload(finalMessageToSend, conversationId = cur
     model_id: modelId,
     model_endpoint_id: modelEndpointId,
     model_provider: modelProvider,
+    model_icon: modelIcon,
     prompt_info: promptInfo,
     agent_info: agentInfo,
     reasoning_effort: getCurrentReasoningEffort(),
@@ -7802,8 +7871,12 @@ function createMaskedContentSpan(range) {
 
 function wrapMaskedRange(messageText, range) {
   const contentLength = messageText.textContent.length;
-  const start = Math.max(0, Math.min(Number(range.start), contentLength));
-  const end = Math.max(0, Math.min(Number(range.end), contentLength));
+  const rawDisplayStart = Number(range.display_start);
+  const rawDisplayEnd = Number(range.display_end);
+  const rawStart = Number.isFinite(rawDisplayStart) ? rawDisplayStart : Number(range.start);
+  const rawEnd = Number.isFinite(rawDisplayEnd) ? rawDisplayEnd : Number(range.end);
+  const start = Math.max(0, Math.min(rawStart, contentLength));
+  const end = Math.max(0, Math.min(rawEnd, contentLength));
   if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) {
     return;
   }
@@ -7950,6 +8023,9 @@ function buildMaskPayload(messageDiv, action, selectionInfo = null) {
       start: selectionInfo.start,
       end: selectionInfo.end,
       text: selectionInfo.text,
+      display_start: selectionInfo.start,
+      display_end: selectionInfo.end,
+      display_text: selectionInfo.text,
     };
   }
   return payload;

@@ -1368,9 +1368,14 @@ app_settings.app_title }} {% endblock %} {% block head %}
         <div id="model-endpoints-wrapper" class="{% if not settings.enable_multi_model_endpoints %}d-none{% endif %}">
           <div class="d-flex justify-content-between align-items-center mb-2">
             <h6 class="mb-0">Group Endpoints</h6>
-            <button type="button" class="btn btn-sm btn-outline-primary" id="add-model-endpoint-btn">
-              <i class="bi bi-plus-circle me-1"></i>Add Endpoint
-            </button>
+            <div class="d-flex flex-wrap gap-2">
+              <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#modelEndpointIdentityGuideModal" data-testid="model-endpoint-identity-guide-open">
+                <i class="bi bi-question-circle me-1"></i>Setup Guide
+              </button>
+              <button type="button" class="btn btn-sm btn-outline-primary" id="add-model-endpoint-btn">
+                <i class="bi bi-plus-circle me-1"></i>Add Endpoint
+              </button>
+            </div>
           </div>
           <div class="table-responsive">
             <table class="table table-sm table-bordered">
@@ -2045,9 +2050,19 @@ app_settings.app_title }} {% endblock %} {% block head %}
           <input type="text" class="form-control" id="workflow-description" maxlength="240" placeholder="Optional summary for the workflow list." />
         </div>
         <div class="mb-3">
-          <label for="workflow-task-prompt" class="form-label">Task Prompt</label>
+          <label for="workflow-task-brief" class="form-label">Task Brief</label>
+          <textarea class="form-control" id="workflow-task-brief" rows="3" placeholder="Briefly describe what this workflow should accomplish."></textarea>
+          <div class="d-flex align-items-center gap-2 mt-2">
+            <button type="button" class="btn btn-outline-primary btn-sm" id="workflow-draft-instructions-btn">
+              <i class="bi bi-magic me-1" aria-hidden="true"></i>Draft Workflow Instructions
+            </button>
+            <span class="text-muted small" id="workflow-draft-instructions-status" aria-live="polite"></span>
+          </div>
+        </div>
+        <div class="mb-3">
+          <label for="workflow-task-prompt" class="form-label">Workflow Instructions</label>
           <textarea class="form-control" id="workflow-task-prompt" rows="7" placeholder="Describe exactly what this workflow should do each time it runs." required></textarea>
-          <div class="form-text">Each run appends this prompt to the workflow conversation as a new user message.</div>
+          <div class="form-text">This instruction will be used to guide the workflow's behavior in each run.</div>
         </div>
         {% if settings.enable_url_access %}
         <div class="form-check form-switch mb-3" id="workflow-url-access-group">

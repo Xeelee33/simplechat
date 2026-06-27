@@ -74,6 +74,26 @@ param enterpriseAppServicePrincipalId string
 @secure()
 param enterpriseAppClientSecret string
 
+@description('''Enable Microsoft Teams tab Single Sign-On for SimpleChat.
+- When true, the app enables Teams token exchange and allows App Service requests to reach the app-level authentication flow.
+- Teams app manifest installation and Entra app pre-authorization are still required outside this deployment.''')
+param enableTeamsSso bool = false
+
+@description('''Optional Teams frame ancestors for Content Security Policy.
+- Leave blank for built-in Azure commercial or Azure Government Teams defaults.
+- Set explicitly for custom or air-gapped Teams clouds.''')
+param teamsFrameAncestors string = ''
+
+@description('''Optional Teams SDK valid origins.
+- Accepts comma, space, or JSON-list formatted origins.
+- Leave blank to reuse the Teams frame ancestors.''')
+param customTeamsOrigins string = ''
+
+@description('''Optional Teams Application ID URI used by microsoftTeams.authentication.getAuthToken.
+- Example: api://simplechat.contoso.com/<client-id>
+- Leave blank to let the app default to api://<client-id>.''')
+param teamsAppResource string = ''
+
 //----------------
 // configurations
 @description('''Authentication type for resources that support Managed Identity or Key authentication.
@@ -267,9 +287,8 @@ param deployVideoIndexerService bool
 var rgName = '${appName}-${environment}-rg'
 var requiredTags = { application: appName, environment: environment, 'azd-env-name': azdEnvironmentName }
 var tags = union(requiredTags, specialTags)
-var isPublicCloud = scCloudEnvironment == 'public'
 var isUsGovernmentCloud = scCloudEnvironment == 'usgovernment'
-var acrCloudSuffix = isPublicCloud ? '.azurecr.io' : '.azurecr.us'
+var acrCloudSuffix = az.environment().suffixes.acrLoginServer
 var acrName = toLower('${appName}${environment}acr')
 var containerRegistry = '${acrName}${acrCloudSuffix}'
 var containerImageName = '${containerRegistry}/${imageName}'
@@ -601,6 +620,10 @@ module appService 'modules/appService.bicep' = {
     appInsightsName: applicationInsights.outputs.appInsightsName
     enterpriseAppClientId: enterpriseAppClientId
     enterpriseAppClientSecret: enterpriseAppClientSecret
+    enableTeamsSso: enableTeamsSso
+    teamsFrameAncestors: teamsFrameAncestors
+    customTeamsOrigins: customTeamsOrigins
+    teamsAppResource: teamsAppResource
     authenticationType: authenticationType
     keyVaultUri: keyVault.outputs.keyVaultUri
 

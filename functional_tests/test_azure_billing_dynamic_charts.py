@@ -2,7 +2,7 @@
 #!/usr/bin/env python3
 """
 Functional test for Azure Billing dynamic chart output.
-Version: 0.242.074
+Version: 0.250.001
 Implemented in: 0.242.074
 
 This test ensures the Azure Billing action returns SimpleChat simplechart

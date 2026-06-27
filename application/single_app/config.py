@@ -95,7 +95,7 @@ load_dotenv()
 EXECUTOR_TYPE = 'thread'
 EXECUTOR_MAX_WORKERS = 30
 SESSION_TYPE = 'filesystem'
-VERSION = "0.242.074"
+VERSION = "0.250.001"
 
 SESSION_COOKIE_SAMESITE = os.getenv('SESSION_COOKIE_SAMESITE', 'Lax')
 SESSION_COOKIE_HTTPONLY = os.getenv('SESSION_COOKIE_HTTPONLY', 'true').lower() != 'false'
@@ -104,34 +104,33 @@ CSRF_ENFORCE_ORIGIN_FOR_UNSAFE_METHODS = os.getenv(
     'CSRF_ENFORCE_ORIGIN_FOR_UNSAFE_METHODS',
     'true'
 ).lower() != 'false'
-CSRF_TRUSTED_ORIGINS = [
-    origin.strip().rstrip('/')
-    for origin in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',')
-    if origin.strip()
-]
+def _split_origin_list(raw_value):
+    """Return trimmed origins from comma, space, or JSON-list environment values."""
+    if not raw_value:
+        return []
+
+    value = raw_value.strip()
+    parsed_values = []
+    if value.startswith('['):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                parsed_values = parsed
+        except (TypeError, ValueError):
+            parsed_values = []
+    else:
+        parsed_values = re.split(r'[\s,]+', value)
+
+    return [
+        str(origin).strip().rstrip('/')
+        for origin in parsed_values
+        if str(origin).strip()
+    ]
+
+
+CSRF_TRUSTED_ORIGINS = _split_origin_list(os.getenv('CSRF_TRUSTED_ORIGINS', ''))
 
 SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
-
-# Security Headers Configuration
-SECURITY_HEADERS = {
-    'X-Content-Type-Options': 'nosniff',
-    'X-Frame-Options': 'DENY',
-    'X-XSS-Protection': '1; mode=block',
-    'Referrer-Policy': 'strict-origin-when-cross-origin',
-    'Content-Security-Policy': (
-        "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
-        "style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' data: https: blob:; "
-        "font-src 'self'; "
-        "connect-src 'self' https: wss: ws:; "
-        "media-src 'self' blob:; "
-        "frame-src 'self' blob:; "
-        "object-src 'none'; "
-        "frame-ancestors 'self'; "
-        "base-uri 'self';"
-    )
-}
 
 # Security Configuration
 ENABLE_STRICT_TRANSPORT_SECURITY = os.getenv('ENABLE_HSTS', 'false').lower() == 'true'
@@ -236,6 +235,11 @@ CI_BEARER_SESSION_REQUIRED_ROLE = os.getenv("CI_BEARER_SESSION_REQUIRED_ROLE", "
 LOGIN_REDIRECT_URL = os.getenv("LOGIN_REDIRECT_URL")
 HOME_REDIRECT_URL = os.getenv("HOME_REDIRECT_URL")  # Front Door URL for home page
 AZURE_ENVIRONMENT = os.getenv("AZURE_ENVIRONMENT", "public") # public, usgovernment, custom
+ENABLE_TEAMS_SSO = os.getenv("ENABLE_TEAMS_SSO", "false").lower() == "true"
+TEAMS_APP_RESOURCE = os.getenv("TEAMS_APP_RESOURCE", "")
+TEAMS_SUCCESS_REDIRECT_PATH = os.getenv("TEAMS_SUCCESS_REDIRECT_PATH", "/chats")
+TEAMS_FRAME_ANCESTORS = _split_origin_list(os.getenv("TEAMS_FRAME_ANCESTORS", ""))
+CUSTOM_TEAMS_ORIGINS = _split_origin_list(os.getenv("CUSTOM_TEAMS_ORIGINS", ""))
 
 WORD_CHUNK_SIZE = 400
 
@@ -281,6 +285,56 @@ else:
     cognitive_services_scope = "https://cognitiveservices.azure.com/.default"
     video_indexer_endpoint = "https://api.videoindexer.ai"
     KEY_VAULT_DOMAIN = ".vault.azure.net"
+
+if ENABLE_TEAMS_SSO and not TEAMS_FRAME_ANCESTORS:
+    if AZURE_ENVIRONMENT == "usgovernment":
+        TEAMS_FRAME_ANCESTORS = [
+            "https://teams.microsoft.us",
+            "https://*.teams.microsoft.us",
+        ]
+    elif AZURE_ENVIRONMENT == "public":
+        TEAMS_FRAME_ANCESTORS = [
+            "https://teams.microsoft.com",
+            "https://*.teams.microsoft.com",
+        ]
+
+if ENABLE_TEAMS_SSO and not CUSTOM_TEAMS_ORIGINS:
+    CUSTOM_TEAMS_ORIGINS = list(TEAMS_FRAME_ANCESTORS)
+
+TEAMS_ALLOWED_ORIGINS = list(dict.fromkeys(TEAMS_FRAME_ANCESTORS + CUSTOM_TEAMS_ORIGINS))
+if ENABLE_TEAMS_SSO:
+    CSRF_TRUSTED_ORIGINS = list(dict.fromkeys(CSRF_TRUSTED_ORIGINS + TEAMS_ALLOWED_ORIGINS))
+    if SESSION_COOKIE_SAMESITE.lower() != 'none':
+        SESSION_COOKIE_SAMESITE = 'None'
+    SESSION_COOKIE_SECURE = True
+
+TEAMS_APP_RESOURCE = TEAMS_APP_RESOURCE or (f"api://{CLIENT_ID}" if CLIENT_ID else "")
+FRAME_ANCESTORS_DIRECTIVE = "frame-ancestors 'self'"
+if TEAMS_FRAME_ANCESTORS:
+    FRAME_ANCESTORS_DIRECTIVE = f"{FRAME_ANCESTORS_DIRECTIVE} {' '.join(TEAMS_FRAME_ANCESTORS)}"
+
+# Security Headers Configuration
+SECURITY_HEADERS = {
+    'X-Content-Type-Options': 'nosniff',
+    'X-XSS-Protection': '1; mode=block',
+    'Referrer-Policy': 'strict-origin-when-cross-origin',
+    'Content-Security-Policy': (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: https: blob:; "
+        "font-src 'self'; "
+        "connect-src 'self' https: wss: ws:; "
+        "media-src 'self' blob:; "
+        "frame-src 'self' blob:; "
+        "object-src 'none'; "
+        f"{FRAME_ANCESTORS_DIRECTIVE}; "
+        "base-uri 'self';"
+    )
+}
+
+if not ENABLE_TEAMS_SSO:
+    SECURITY_HEADERS['X-Frame-Options'] = 'DENY'
 
 def get_redis_cache_infrastructure_endpoint(redis_hostname: str) -> str:
     """
