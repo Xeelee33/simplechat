@@ -2,6 +2,15 @@
 
 For feature-focused and fix-focused drill-downs by version, see [Features by Version](/explanation/features/) and [Fixes by Version](/explanation/fixes/).
 
+### **(v0.250.003)**
+
+#### Bug Fixes
+
+*   **Admin Settings Update Banner Version Comparison**
+    *   Fixed stale cached update-check settings so Admin Settings no longer displays an older release such as `v0.250.001` as available when the running app version is newer.
+    *   The render path now recomputes `update_available` from the cached latest version and the current app version before showing the banner.
+    *   (Ref: Admin Settings update banner, `compare_versions`, `test_admin_update_banner_version_comparison.py`)
+
 ### **(v0.250.001)**
 
 #### New Features

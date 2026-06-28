@@ -55,6 +55,12 @@ AGENTS_PAGE_DEFAULTS = {
 }
 HEX_COLOR_PATTERN = re.compile(r'^#[0-9a-fA-F]{6}$')
 
+
+def _is_update_version_newer(latest_version, current_version):
+    """Return True only when the discovered release version is newer than the running version."""
+    return compare_versions(latest_version, current_version) == 1
+
+
 def allowed_file(filename, allowed_extensions):
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in allowed_extensions
@@ -508,7 +514,7 @@ def register_route_frontend_admin_settings(bp):
                         }
                         
                         # Compare with current version
-                        if latest_version and compare_versions(latest_version, current_version) == 1:
+                        if _is_update_version_newer(latest_version, current_version):
                             new_settings['update_available'] = True
                         else:
                             new_settings['update_available'] = False
@@ -521,8 +527,14 @@ def register_route_frontend_admin_settings(bp):
                     log_event(f"Error checking for updates: {e}", level=logging.ERROR)
             
             # Get the persisted values for template rendering
-            update_available = settings.get('update_available', False)
             latest_version = settings.get('latest_version_available')
+            update_available = _is_update_version_newer(latest_version, current_version)
+            if settings.get('update_available') != update_available:
+                try:
+                    update_settings({'update_available': update_available})
+                    settings['update_available'] = update_available
+                except Exception as e:
+                    log_event(f"Error normalizing cached update availability: {e}", level=logging.WARNING)
             
             # Get user settings for profile and navigation
             user_id = get_current_user_id()

@@ -2,7 +2,7 @@
 # test_route_unauthenticated_policy_contract.py
 """
 Functional test for route unauthenticated access policy contract.
-Version: 0.250.001
+Version: 0.250.003
 Implemented in: 0.242.069
 
 This test ensures every SimpleChat route has an explicit expected unauthenticated
