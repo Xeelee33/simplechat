@@ -2,7 +2,7 @@
 # test_route_blueprint_policy_inventory.py
 """
 Functional test for route blueprint policy inventory.
-Version: 0.250.003
+Version: 0.250.004
 Implemented in: 0.242.069
 
 This test ensures every SimpleChat route is assigned to a Blueprint-based
@@ -188,7 +188,7 @@ def iter_route_functions() -> list[RouteFunction]:
 
 def test_route_policy_inventory_assets_and_version_are_current() -> None:
     """Verify the route policy test folder is wired to the current implementation version."""
-    assert read_config_version() == "0.250.003"
+    assert read_config_version() == "0.250.004"
     assert Path(__file__).parent.name == "route_tests"
 
 

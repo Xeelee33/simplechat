@@ -2,7 +2,7 @@
 # test_admin_update_banner_version_comparison.py
 """
 Functional test for Admin Settings update banner version comparison.
-Version: 0.250.003
+Version: 0.250.004
 Implemented in: 0.250.003
 
 This test ensures cached update-check settings cannot display an older release
@@ -61,11 +61,11 @@ def test_update_banner_suppresses_stale_cached_older_release() -> None:
     """Cached latest release must not show when it is older than the running app version."""
     is_update_version_newer = load_update_helper()
 
-    assert read_config_version() == '0.250.003'
-    assert is_update_version_newer('0.250.001', '0.250.003') is False
-    assert is_update_version_newer('v0.250.001', '0.250.003') is False
-    assert is_update_version_newer('0.250.003', '0.250.003') is False
-    assert is_update_version_newer('0.250.004', '0.250.003') is True
+    assert read_config_version() == '0.250.004'
+    assert is_update_version_newer('0.250.001', '0.250.004') is False
+    assert is_update_version_newer('v0.250.001', '0.250.004') is False
+    assert is_update_version_newer('0.250.004', '0.250.004') is False
+    assert is_update_version_newer('0.250.005', '0.250.004') is True
 
 
 def test_admin_settings_render_path_recomputes_cached_update_flag() -> None:

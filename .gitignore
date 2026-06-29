@@ -61,4 +61,4 @@ deploy.zip
 application/teams_app/manifest.json
 application/teams_app/*.zip
 
-local_storage_state.json 
+local_storage_state.json
