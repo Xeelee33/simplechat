@@ -207,15 +207,7 @@ def register_route_backend_models(bp):
         }
 
     def resolve_foundry_scope(auth_settings):
-        management_cloud = (auth_settings.get("management_cloud") or "public").lower()
-        if management_cloud == "government":
-            return "https://ai.azure.us/.default"
-        if management_cloud == "custom":
-            custom_scope = (auth_settings.get("foundry_scope") or "").strip()
-            if not custom_scope:
-                raise ValueError("Foundry scope is required for custom cloud configurations.")
-            return custom_scope
-        return "https://ai.azure.com/.default"
+        return resolve_model_endpoint_foundry_scope(auth_settings)
 
     def build_foundry_token(auth_settings):
         management_cloud = (auth_settings.get("management_cloud") or "public").lower()
@@ -264,17 +256,13 @@ def register_route_backend_models(bp):
         return endpoint_host.split(".")[0].strip()
 
     def get_management_cloud_for_environment():
-        if AZURE_ENVIRONMENT == "usgovernment":
-            return "government"
-        if AZURE_ENVIRONMENT == "custom":
-            return "custom"
-        return "public"
+        return get_model_endpoint_management_cloud_for_environment()
 
     def build_legacy_aoai_discovery_auth_settings():
         return {
             "type": "service_principal",
             "management_cloud": get_management_cloud_for_environment(),
-            "custom_authority": authority if AZURE_ENVIRONMENT == "custom" else "",
+            "custom_authority": get_model_endpoint_default_custom_authority(),
             "tenant_id": TENANT_ID,
             "client_id": CLIENT_ID,
             "client_secret": MICROSOFT_PROVIDER_AUTHENTICATION_SECRET,
