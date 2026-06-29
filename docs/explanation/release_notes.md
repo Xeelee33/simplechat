@@ -11,12 +11,6 @@ For feature-focused and fix-focused drill-downs by version, see [Features by Ver
 
 ## Bug Fixes
 
-*   **Conversation Summary and Export Multi-Endpoint Model Alignment**
-    *   Fixed conversation summary generation so the on-demand summary card and conversation export intros now resolve GPT models through the same multi-endpoint configuration used by streaming chat.
-    *   Summary and export flows now send the selected model's deployment, model id, endpoint id, and provider from the chat UI, ensuring 5.1 and other multi-endpoint models use the correct Azure OpenAI or Foundry endpoint instead of falling back to a legacy single-endpoint configuration that could return `DeploymentNotFound`.
-    *   Added shared helpers so both summary and export paths prefer the multi-endpoint resolver and only fall back to the legacy single-endpoint settings when multi-endpoint is disabled, keeping model behavior consistent across chat, summaries, and exports.
-    *   (Ref: `chat-conversation-details.js`, `chat-export.js`, `route_backend_conversations.py`, `route_backend_conversation_export.py`, multi-endpoint model resolution for summaries and exports)
-
 *   **Uploaded File Preview Body XSS Hardening**
     *   Fixed the uploaded-file preview modal so stored file bodies no longer reach the preview pane through raw HTML sinks.
     *   Plain-text previews now render as inert preformatted text, CSV-backed previews are built with DOM text nodes, and legacy HTML-backed table payloads now fall back to inert text instead of live markup.

@@ -9,7 +9,7 @@ import zipfile
 from collections import Counter, defaultdict
 from datetime import datetime
 from html import escape as _escape_html
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from bs4 import BeautifulSoup, NavigableString, Tag
 from config import *
@@ -56,9 +56,6 @@ def register_route_backend_conversation_export(app):
             packaging (str): Output packaging — "single" or "zip".
             include_summary_intro (bool): Whether to generate a per-conversation intro.
             summary_model_deployment (str): Optional model deployment for summary generation.
-            summary_model_id (str): Optional multi-endpoint model id for summary generation.
-            summary_model_endpoint_id (str): Optional multi-endpoint endpoint id for summary generation.
-            summary_model_provider (str): Optional provider (aoai/aifoundry) for summary generation.
         """
         user_id = get_current_user_id()
         if not user_id:
@@ -73,9 +70,6 @@ def register_route_backend_conversation_export(app):
         packaging = str(data.get('packaging', 'single')).lower()
         include_summary_intro = bool(data.get('include_summary_intro', False))
         summary_model_deployment = str(data.get('summary_model_deployment', '') or '').strip()
-        summary_model_id = str(data.get('summary_model_id', '') or '').strip()
-        summary_model_endpoint_id = str(data.get('summary_model_endpoint_id', '') or '').strip()
-        summary_model_provider = str(data.get('summary_model_provider', '') or '').strip()
 
         if not conversation_ids or not isinstance(conversation_ids, list):
             return jsonify({'error': 'At least one conversation_id is required'}), 400
@@ -121,10 +115,7 @@ def register_route_backend_conversation_export(app):
                         user_id=user_id,
                         settings=settings,
                         include_summary_intro=include_summary_intro,
-                        summary_model_deployment=summary_model_deployment,
-                        summary_model_id=summary_model_id,
-                        summary_model_endpoint_id=summary_model_endpoint_id,
-                        summary_model_provider=summary_model_provider
+                        summary_model_deployment=summary_model_deployment
                     )
                 )
 
@@ -256,10 +247,7 @@ def _build_export_entry(
     user_id: str,
     settings: Dict[str, Any],
     include_summary_intro: bool = False,
-    summary_model_deployment: str = '',
-    summary_model_id: str = '',
-    summary_model_endpoint_id: str = '',
-    summary_model_provider: str = '',
+    summary_model_deployment: str = ''
 ) -> Dict[str, Any]:
     artifact_payload_map = build_message_artifact_payload_map(raw_messages)
     filtered_messages = _filter_messages_for_export(raw_messages)
@@ -321,9 +309,6 @@ def _build_export_entry(
         settings=settings,
         enabled=include_summary_intro,
         summary_model_deployment=summary_model_deployment,
-        summary_model_id=summary_model_id,
-        summary_model_endpoint_id=summary_model_endpoint_id,
-        summary_model_provider=summary_model_provider,
         message_time_start=message_time_start,
         message_time_end=message_time_end
     )
@@ -675,12 +660,7 @@ def generate_conversation_summary(
     model_deployment: str,
     message_time_start: str = None,
     message_time_end: str = None,
-    conversation_id: str = None,
-    model_id: Optional[str] = None,
-    model_endpoint_id: Optional[str] = None,
-    model_provider: Optional[str] = None,
-    user_id: Optional[str] = None,
-    active_group_ids: Optional[List[str]] = None,
+    conversation_id: str = None
 ) -> Dict[str, Any]:
     """Generate a conversation summary using the LLM and optionally persist it.
 
@@ -706,25 +686,7 @@ def generate_conversation_summary(
 
     transcript_text = _truncate_for_summary(transcript_text)
 
-    # Prefer multi-endpoint model resolution so summaries use the same
-    # AOAI endpoint/deployment as chat for a given model selection.
-    gpt_client: AzureOpenAI
-    gpt_model: str
-
-    multi_endpoint_client = _initialize_summary_multi_endpoint_client(
-        settings,
-        model_deployment=model_deployment,
-        model_id=model_id,
-        model_endpoint_id=model_endpoint_id,
-        model_provider=model_provider,
-        user_id=user_id,
-        active_group_ids=active_group_ids or [],
-    )
-
-    if multi_endpoint_client is not None:
-        gpt_client, gpt_model = multi_endpoint_client
-    else:
-        gpt_client, gpt_model = _initialize_gpt_client(settings, model_deployment)
+    gpt_client, gpt_model = _initialize_gpt_client(settings, model_deployment)
     summary_prompt = (
         "You are summarizing a conversation for an export document. "
         "Read the full conversation below and write a concise summary. "
@@ -799,9 +761,6 @@ def _build_summary_intro(
     settings: Dict[str, Any],
     enabled: bool,
     summary_model_deployment: str,
-    summary_model_id: str = '',
-    summary_model_endpoint_id: str = '',
-    summary_model_provider: str = '',
     message_time_start: str = None,
     message_time_end: str = None
 ) -> Dict[str, Any]:
@@ -850,12 +809,7 @@ def _build_summary_intro(
             model_deployment=summary_model_deployment,
             message_time_start=message_time_start,
             message_time_end=message_time_end,
-            conversation_id=conversation_id,
-            model_id=summary_model_id or None,
-            model_endpoint_id=summary_model_endpoint_id or None,
-            model_provider=summary_model_provider or None,
-            user_id=conversation.get('user_id'),
-            active_group_ids=[],
+            conversation_id=conversation_id
         )
 
         summary_intro.update({
@@ -892,55 +846,6 @@ def _truncate_for_summary(transcript_text: str) -> str:
         + "\n\n[... transcript truncated for export summary generation ...]\n\n"
         + transcript_text[-tail_chars:]
     )
-
-
-def _initialize_summary_multi_endpoint_client(
-    settings: Dict[str, Any],
-    model_deployment: str,
-    model_id: Optional[str] = None,
-    model_endpoint_id: Optional[str] = None,
-    model_provider: Optional[str] = None,
-    user_id: Optional[str] = None,
-    active_group_ids: Optional[List[str]] = None,
-) -> Optional[Tuple[AzureOpenAI, str]]:
-    """Initialize a GPT client for summaries using the multi-endpoint model config.
-
-    This mirrors the streaming model resolution path so that summaries use the
-    exact same AOAI endpoint/deployment as chat for a given model selection.
-    Returns (client, deployment) when a multi-endpoint config can be resolved,
-    otherwise None to allow fallback to the legacy single-endpoint settings.
-    """
-    try:
-        from route_backend_chats import resolve_streaming_multi_endpoint_gpt_config
-    except Exception:
-        return None
-
-    if not settings.get('enable_multi_model_endpoints', False):
-        return None
-
-    request_payload = {
-        'model_deployment': model_deployment or '',
-        'model_id': model_id or '',
-        'model_endpoint_id': model_endpoint_id or '',
-        'model_provider': model_provider or '',
-    }
-
-    try:
-        resolved = resolve_streaming_multi_endpoint_gpt_config(
-            settings,
-            request_payload,
-            user_id or '',
-            active_group_ids=active_group_ids or [],
-            allow_default_selection=False,
-        )
-    except Exception:
-        return None
-
-    if not resolved:
-        return None
-
-    gpt_client, deployment, _provider, _endpoint, _auth_settings, _api_version = resolved
-    return gpt_client, deployment
 
 
 def _initialize_gpt_client(settings: Dict[str, Any], requested_model: str = ''):
