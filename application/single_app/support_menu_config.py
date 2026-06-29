@@ -5,6 +5,13 @@ from copy import deepcopy
 
 
 _SUPPORT_LATEST_FEATURE_DOCS_SETTING_KEY = 'enable_support_latest_feature_documentation_links'
+_LEGACY_ACTION_ENDPOINTS = {
+    'chats': 'frontend_chats.chats',
+    'workspace': 'frontend_workspace.workspace',
+    'profile': 'frontend_profile.profile',
+    'support_latest_features': 'frontend_support.support_latest_features',
+    'support_send_feedback': 'frontend_support.support_send_feedback',
+}
 
 
 def _latest_feature_card(feature_id, title, icon, summary, details, why, guidance, actions=None, image_label=None, image_title=None, image_caption=None, image_name=None, include_media=True):
@@ -2160,6 +2167,17 @@ def _action_enabled(action, settings):
     return all(_setting_enabled(settings, setting_key) for setting_key in required_settings)
 
 
+def _normalize_action_endpoint(action):
+    endpoint = action.get('endpoint')
+    if endpoint in _LEGACY_ACTION_ENDPOINTS:
+        action['endpoint'] = _LEGACY_ACTION_ENDPOINTS[endpoint]
+
+
+def _normalize_feature_actions(feature):
+    for action in feature.get('actions', []):
+        _normalize_action_endpoint(action)
+
+
 def _normalize_feature_media(feature):
     """Ensure every visible feature exposes at least one image entry for the template."""
     images = feature.get('images') or []
@@ -2186,12 +2204,19 @@ def _normalize_feature_media(feature):
 
 def get_support_latest_feature_catalog():
     """Return a copy of the support latest-features catalog."""
-    return _flatten_support_feature_groups(_SUPPORT_LATEST_FEATURE_RELEASE_GROUPS)
+    features = _flatten_support_feature_groups(_SUPPORT_LATEST_FEATURE_RELEASE_GROUPS)
+    for feature in features:
+        _normalize_feature_actions(feature)
+    return features
 
 
 def get_support_latest_feature_release_groups():
     """Return grouped latest-feature metadata organized by release."""
-    return deepcopy(_SUPPORT_LATEST_FEATURE_RELEASE_GROUPS)
+    feature_groups = deepcopy(_SUPPORT_LATEST_FEATURE_RELEASE_GROUPS)
+    for feature_group in feature_groups:
+        for feature in feature_group.get('features', []):
+            _normalize_feature_actions(feature)
+    return feature_groups
 
 
 def get_default_support_latest_features_visibility():
@@ -2235,6 +2260,7 @@ def get_visible_support_latest_features(settings):
                 action for action in visible_item.get('actions', [])
                 if _action_enabled(action, settings)
             ]
+            _normalize_feature_actions(visible_item)
             visible_item = _apply_support_application_title(visible_item, app_title)
             _normalize_feature_media(visible_item)
             visible_items.append(visible_item)
@@ -2262,6 +2288,7 @@ def get_visible_support_latest_feature_groups(settings):
                 action for action in visible_feature.get('actions', [])
                 if _action_enabled(action, settings)
             ]
+            _normalize_feature_actions(visible_feature)
             visible_feature = _apply_support_application_title(visible_feature, app_title)
             _normalize_feature_media(visible_feature)
             visible_features.append(visible_feature)
@@ -2286,6 +2313,7 @@ def get_support_latest_feature_release_groups_for_settings(settings):
                 action for action in feature.get('actions', [])
                 if _action_enabled(action, settings)
             ]
+            _normalize_feature_actions(feature)
             feature.update(_apply_support_application_title(feature, app_title))
             _normalize_feature_media(feature)
 
@@ -2305,6 +2333,7 @@ def get_admin_latest_feature_release_groups_for_settings(settings):
                 action for action in feature.get('actions', [])
                 if _action_enabled(action, settings)
             ]
+            _normalize_feature_actions(feature)
             feature.update(_apply_support_application_title(feature, app_title))
             _normalize_feature_media(feature)
 

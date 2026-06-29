@@ -47,14 +47,14 @@ def _require_external_public_workspace_context(allowed_roles, operation_type=Non
 
     return user_id, active_workspace_id, workspace_doc, role, None
 
-def register_route_external_public_documents(app):
+def register_route_external_public_documents(bp):
     """
     Provides backend routes for public-level document management:
     - GET /external/public_documents      (list)
     - POST /external/public_documents/upload
     - DELETE /external/public_documents/<doc_id>
     """
-    @app.route('/external/public_documents/upload', methods=['POST'])
+    @bp.route('/external/public_documents/upload', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @accesstoken_required
     @enabled_required("enable_public_workspaces")
@@ -168,7 +168,7 @@ def register_route_external_public_documents(app):
         }), response_status
 
         
-    @app.route('/external/public_documents', methods=['GET'])
+    @bp.route('/external/public_documents', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @accesstoken_required
     @enabled_required("enable_public_workspaces")
@@ -295,7 +295,7 @@ def register_route_external_public_documents(app):
         }), 200
 
 
-    @app.route('/external/public_documents/<document_id>', methods=['GET'])
+    @bp.route('/external/public_documents/<document_id>', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @accesstoken_required
     @enabled_required("enable_public_workspaces")
@@ -313,7 +313,7 @@ def register_route_external_public_documents(app):
 
         return get_document(user_id=user_id, document_id=document_id, public_workspace_id=active_workspace_id)
 
-    @app.route('/external/public_documents/<document_id>', methods=['PATCH'])
+    @bp.route('/external/public_documents/<document_id>', methods=['PATCH'])
     @swagger_route(security=get_auth_security())
     @accesstoken_required
     @enabled_required("enable_public_workspaces")
@@ -433,7 +433,7 @@ def register_route_external_public_documents(app):
    
 
 
-    @app.route('/external/public_documents/<document_id>', methods=['DELETE'])
+    @bp.route('/external/public_documents/<document_id>', methods=['DELETE'])
     @swagger_route(security=get_auth_security())
     @accesstoken_required
     @enabled_required("enable_public_workspaces")
@@ -468,7 +468,7 @@ def register_route_external_public_documents(app):
             return jsonify({'error': f'Error deleting public document: {str(e)}'}), 500
 
 
-    @app.route('/external/public_documents/<document_id>/extract_metadata', methods=['POST'])
+    @bp.route('/external/public_documents/<document_id>/extract_metadata', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @accesstoken_required
     @enabled_required("enable_public_workspaces")
@@ -506,7 +506,7 @@ def register_route_external_public_documents(app):
             'document_id': document_id
         }), 200
         
-    @app.route('/external/public_documents/upgrade_legacy', methods=['POST'])
+    @bp.route('/external/public_documents/upgrade_legacy', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @accesstoken_required
     @enabled_required("enable_public_workspaces")

@@ -95,7 +95,7 @@ load_dotenv()
 EXECUTOR_TYPE = 'thread'
 EXECUTOR_MAX_WORKERS = 30
 SESSION_TYPE = 'filesystem'
-VERSION = "0.250.001"
+VERSION = "0.250.004"
 
 SESSION_COOKIE_SAMESITE = os.getenv('SESSION_COOKIE_SAMESITE', 'Lax')
 SESSION_COOKIE_HTTPONLY = os.getenv('SESSION_COOKIE_HTTPONLY', 'true').lower() != 'false'
@@ -104,6 +104,7 @@ CSRF_ENFORCE_ORIGIN_FOR_UNSAFE_METHODS = os.getenv(
     'CSRF_ENFORCE_ORIGIN_FOR_UNSAFE_METHODS',
     'true'
 ).lower() != 'false'
+
 def _split_origin_list(raw_value):
     """Return trimmed origins from comma, space, or JSON-list environment values."""
     if not raw_value:
@@ -312,6 +313,7 @@ TEAMS_APP_RESOURCE = TEAMS_APP_RESOURCE or (f"api://{CLIENT_ID}" if CLIENT_ID el
 FRAME_ANCESTORS_DIRECTIVE = "frame-ancestors 'self'"
 if TEAMS_FRAME_ANCESTORS:
     FRAME_ANCESTORS_DIRECTIVE = f"{FRAME_ANCESTORS_DIRECTIVE} {' '.join(TEAMS_FRAME_ANCESTORS)}"
+
 
 # Security Headers Configuration
 SECURITY_HEADERS = {

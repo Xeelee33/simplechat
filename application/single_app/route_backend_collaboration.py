@@ -385,8 +385,8 @@ def _sync_collaboration_mask_metadata_to_source(message_doc):
     source_container.upsert_item(source_message_doc)
 
 
-def register_route_backend_collaboration(app):
-    @app.route('/api/collaboration/conversations', methods=['GET'])
+def register_route_backend_collaboration(bp):
+    @bp.route('/api/collaboration/conversations', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -436,7 +436,7 @@ def register_route_backend_collaboration(app):
             )
             return jsonify({'error': 'Failed to load collaborative conversations'}), 500
 
-    @app.route('/api/collaboration/conversations', methods=['POST'])
+    @bp.route('/api/collaboration/conversations', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -544,7 +544,7 @@ def register_route_backend_collaboration(app):
             )
             return jsonify({'error': 'Failed to create collaborative conversation'}), 500
 
-    @app.route('/api/collaboration/conversations/<conversation_id>', methods=['GET'])
+    @bp.route('/api/collaboration/conversations/<conversation_id>', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -579,7 +579,7 @@ def register_route_backend_collaboration(app):
             )
             return jsonify({'error': 'Failed to load collaborative conversation'}), 500
 
-    @app.route('/api/collaboration/conversations/<conversation_id>/invite-response', methods=['POST'])
+    @bp.route('/api/collaboration/conversations/<conversation_id>/invite-response', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -630,7 +630,7 @@ def register_route_backend_collaboration(app):
             )
             return jsonify({'error': 'Failed to update invite response'}), 500
 
-    @app.route('/api/collaboration/conversations/<conversation_id>/members', methods=['POST'])
+    @bp.route('/api/collaboration/conversations/<conversation_id>/members', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -692,7 +692,7 @@ def register_route_backend_collaboration(app):
             )
             return jsonify({'error': 'Failed to invite collaborative conversation members'}), 500
 
-    @app.route('/api/collaboration/conversations/from-personal/<conversation_id>/members', methods=['POST'])
+    @bp.route('/api/collaboration/conversations/from-personal/<conversation_id>/members', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -771,7 +771,7 @@ def register_route_backend_collaboration(app):
             )
             return jsonify({'error': 'Failed to convert conversation to collaborative conversation'}), 500
 
-    @app.route('/api/collaboration/conversations/from-group/<conversation_id>/members', methods=['POST'])
+    @bp.route('/api/collaboration/conversations/from-group/<conversation_id>/members', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -853,7 +853,7 @@ def register_route_backend_collaboration(app):
             )
             return jsonify({'error': 'Failed to convert group conversation to collaborative conversation'}), 500
 
-    @app.route('/api/collaboration/conversations/<conversation_id>/members/<member_user_id>', methods=['DELETE'])
+    @bp.route('/api/collaboration/conversations/<conversation_id>/members/<member_user_id>', methods=['DELETE'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -899,7 +899,7 @@ def register_route_backend_collaboration(app):
             )
             return jsonify({'error': 'Failed to remove collaborative conversation member'}), 500
 
-    @app.route('/api/collaboration/conversations/<conversation_id>/members/<member_user_id>/role', methods=['PUT'])
+    @bp.route('/api/collaboration/conversations/<conversation_id>/members/<member_user_id>/role', methods=['PUT'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -952,7 +952,7 @@ def register_route_backend_collaboration(app):
             )
             return jsonify({'error': 'Failed to update collaborative conversation role'}), 500
 
-    @app.route('/api/collaboration/conversations/<conversation_id>', methods=['PUT'])
+    @bp.route('/api/collaboration/conversations/<conversation_id>', methods=['PUT'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1001,7 +1001,7 @@ def register_route_backend_collaboration(app):
             )
             return jsonify({'error': 'Failed to update collaborative conversation'}), 500
 
-    @app.route('/api/collaboration/conversations/<conversation_id>/pin', methods=['POST'])
+    @bp.route('/api/collaboration/conversations/<conversation_id>/pin', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1026,7 +1026,7 @@ def register_route_backend_collaboration(app):
             )
             return jsonify({'error': 'Failed to toggle collaborative pin status'}), 500
 
-    @app.route('/api/collaboration/conversations/<conversation_id>/hide', methods=['POST'])
+    @bp.route('/api/collaboration/conversations/<conversation_id>/hide', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1051,7 +1051,7 @@ def register_route_backend_collaboration(app):
             )
             return jsonify({'error': 'Failed to toggle collaborative hide status'}), 500
 
-    @app.route('/api/collaboration/conversations/<conversation_id>/delete-action', methods=['POST'])
+    @bp.route('/api/collaboration/conversations/<conversation_id>/delete-action', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1133,7 +1133,7 @@ def register_route_backend_collaboration(app):
             )
             return jsonify({'error': 'Failed to update collaborative conversation membership'}), 500
 
-    @app.route('/api/collaboration/conversations/<conversation_id>/messages', methods=['GET'])
+    @bp.route('/api/collaboration/conversations/<conversation_id>/messages', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1164,7 +1164,7 @@ def register_route_backend_collaboration(app):
             )
             return jsonify({'error': 'Failed to load collaborative conversation messages'}), 500
 
-    @app.route('/api/collaboration/conversations/<conversation_id>/messages/<message_id>/mask', methods=['POST'])
+    @bp.route('/api/collaboration/conversations/<conversation_id>/messages/<message_id>/mask', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1243,7 +1243,7 @@ def register_route_backend_collaboration(app):
             )
             return jsonify({'error': 'Failed to update shared message mask state'}), 500
 
-    @app.route('/api/collaboration/conversations/<conversation_id>/images/<message_id>', methods=['GET'])
+    @bp.route('/api/collaboration/conversations/<conversation_id>/images/<message_id>', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1306,7 +1306,7 @@ def register_route_backend_collaboration(app):
             )
             return jsonify({'error': 'Failed to load collaborative image'}), 500
 
-    @app.route('/api/collaboration/conversations/<conversation_id>/messages', methods=['POST'])
+    @bp.route('/api/collaboration/conversations/<conversation_id>/messages', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1366,7 +1366,7 @@ def register_route_backend_collaboration(app):
             )
             return jsonify({'error': 'Failed to post collaborative conversation message'}), 500
 
-    @app.route('/api/collaboration/conversations/<conversation_id>/stream', methods=['POST'])
+    @bp.route('/api/collaboration/conversations/<conversation_id>/stream', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1676,7 +1676,7 @@ def register_route_backend_collaboration(app):
             )
             return jsonify({'error': 'Failed to start collaborative AI workflow'}), 500
 
-    @app.route('/api/collaboration/conversations/<conversation_id>/stream/cancel', methods=['POST'])
+    @bp.route('/api/collaboration/conversations/<conversation_id>/stream/cancel', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1726,7 +1726,7 @@ def register_route_backend_collaboration(app):
             )
             return jsonify({'error': 'Failed to cancel collaborative AI stream'}), 500
 
-    @app.route('/api/collaboration/conversations/<conversation_id>/messages/<message_id>', methods=['DELETE'])
+    @bp.route('/api/collaboration/conversations/<conversation_id>/messages/<message_id>', methods=['DELETE'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1785,7 +1785,7 @@ def register_route_backend_collaboration(app):
             )
             return jsonify({'error': 'Failed to delete collaborative conversation message'}), 500
 
-    @app.route('/api/collaboration/conversations/<conversation_id>/mark-read', methods=['POST'])
+    @bp.route('/api/collaboration/conversations/<conversation_id>/mark-read', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1824,7 +1824,7 @@ def register_route_backend_collaboration(app):
             )
             return jsonify({'error': 'Failed to mark collaborative conversation read'}), 500
 
-    @app.route('/api/collaboration/conversations/<conversation_id>/typing', methods=['POST'])
+    @bp.route('/api/collaboration/conversations/<conversation_id>/typing', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1866,7 +1866,7 @@ def register_route_backend_collaboration(app):
             )
             return jsonify({'error': 'Failed to publish typing event'}), 500
 
-    @app.route('/api/collaboration/conversations/<conversation_id>/events', methods=['GET'])
+    @bp.route('/api/collaboration/conversations/<conversation_id>/events', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required

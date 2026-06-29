@@ -5,6 +5,8 @@ import re
 from config import *
 from functions_documents import *
 from functions_authentication import *
+from flask import current_app
+
 from functions_keyvault import keyvault_model_endpoint_cleanup_helper, keyvault_model_endpoint_delete_helper, keyvault_model_endpoint_save_helper, redact_model_endpoint_secret_values
 from functions_settings import *
 from functions_file_sync import FILE_SYNC_DEFAULTS, get_file_sync_config
@@ -52,6 +54,12 @@ AGENTS_PAGE_DEFAULTS = {
     'agents_page_promoted_popular_tag_label': AGENTS_PAGE_PROMOTED_POPULAR_TAG_LABEL_DEFAULT,
 }
 HEX_COLOR_PATTERN = re.compile(r'^#[0-9a-fA-F]{6}$')
+
+
+def _is_update_version_newer(latest_version, current_version):
+    """Return True only when the discovered release version is newer than the running version."""
+    return compare_versions(latest_version, current_version) == 1
+
 
 def allowed_file(filename, allowed_extensions):
     return '.' in filename and \
@@ -109,8 +117,8 @@ def normalize_agents_page_text(value, fallback, max_length):
         candidate = fallback
     return candidate[:max_length]
 
-def register_route_frontend_admin_settings(app):
-    @app.route('/admin/settings', methods=['GET', 'POST'])
+def register_route_frontend_admin_settings(bp):
+    @bp.route('/admin/settings', methods=['GET', 'POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -476,7 +484,7 @@ def register_route_frontend_admin_settings(app):
                  log_event(f"Error retrieving GPT deployments: {e}", level=logging.ERROR)
 
             # Check for application updates
-            current_version = app.config['VERSION']
+            current_version = current_app.config['VERSION']
             update_available = False
             latest_version = None
             download_url = "https://github.com/microsoft/simplechat/releases"
@@ -506,7 +514,7 @@ def register_route_frontend_admin_settings(app):
                         }
                         
                         # Compare with current version
-                        if latest_version and compare_versions(latest_version, current_version) == 1:
+                        if _is_update_version_newer(latest_version, current_version):
                             new_settings['update_available'] = True
                         else:
                             new_settings['update_available'] = False
@@ -519,8 +527,14 @@ def register_route_frontend_admin_settings(app):
                     log_event(f"Error checking for updates: {e}", level=logging.ERROR)
             
             # Get the persisted values for template rendering
-            update_available = settings.get('update_available', False)
             latest_version = settings.get('latest_version_available')
+            update_available = _is_update_version_newer(latest_version, current_version)
+            if settings.get('update_available') != update_available:
+                try:
+                    update_settings({'update_available': update_available})
+                    settings['update_available'] = update_available
+                except Exception as e:
+                    log_event(f"Error normalizing cached update availability: {e}", level=logging.WARNING)
             
             # Get user settings for profile and navigation
             user_id = get_current_user_id()
@@ -1651,7 +1665,7 @@ def register_route_frontend_admin_settings(app):
             if cosmos_throughput_validation_errors:
                 for validation_error in cosmos_throughput_validation_errors:
                     flash(validation_error, 'danger')
-                return redirect(url_for('admin_settings'))
+                return redirect(url_for('frontend_admin_settings.admin_settings'))
 
             cosmos_throughput_settings = normalize_cosmos_throughput_settings(cosmos_throughput_candidate_settings)
 
@@ -2388,7 +2402,7 @@ def register_route_frontend_admin_settings(app):
 
 
             # Redirect back to settings page
-            return redirect(url_for('admin_settings'))
+            return redirect(url_for('frontend_admin_settings.admin_settings'))
 
         # Fallback if not GET or POST (shouldn't happen with standard routing)
-        return redirect(url_for('admin_settings'))
+        return redirect(url_for('frontend_admin_settings.admin_settings'))

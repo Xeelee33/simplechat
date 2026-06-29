@@ -7,10 +7,13 @@ This supports the dynamic selection of redis or in-memory caching of settings.
 import json
 import logging
 import copy
+import base64
+import os
 import threading
 import time
 from datetime import datetime
 from redis import Redis
+from redis.credentials import CredentialProvider
 from azure.identity import DefaultAzureCredential
 
 # NOTE: functions_keyvault is imported locally inside configure_app_cache to avoid a circular
@@ -19,6 +22,8 @@ from azure.identity import DefaultAzureCredential
 
 _settings = None
 _logger = logging.getLogger(__name__)
+REDIS_ENTRA_TOKEN_SCOPE = 'https://redis.azure.com/.default'
+REDIS_TOKEN_REFRESH_BUFFER_SECONDS = 300
 APP_SETTINGS_CACHE = {}
 APP_USER_UI_SETTINGS_CACHE = {}
 APP_STREAM_SESSION_METADATA = {}
@@ -53,6 +58,65 @@ get_governance_cache_version = None
 bump_governance_cache_version = None
 app_cache_is_using_redis = False
 _app_cache_lock = threading.Lock()
+
+
+def _get_redis_entra_token_scope(settings=None):
+    configured_scope = (settings or {}).get('redis_entra_token_scope') or os.getenv('REDIS_ENTRA_TOKEN_SCOPE')
+    return (configured_scope or REDIS_ENTRA_TOKEN_SCOPE).strip()
+
+
+def _decode_token_claims(access_token):
+    parts = access_token.split('.')
+    if len(parts) < 2:
+        raise ValueError('Redis Microsoft Entra token did not contain JWT claims.')
+
+    payload = parts[1]
+    payload += '=' * (-len(payload) % 4)
+    decoded_payload = base64.urlsafe_b64decode(payload.encode('utf-8')).decode('utf-8')
+    return json.loads(decoded_payload)
+
+
+def _get_redis_username_from_claims(access_token):
+    claims = _decode_token_claims(access_token)
+    username = claims.get('oid') or claims.get('appid')
+    if not username:
+        raise ValueError('Redis Microsoft Entra token did not include an object ID claim.')
+    return username
+
+
+class RedisManagedIdentityCredentialProvider(CredentialProvider):
+    """Provides Redis ACL username and Microsoft Entra token credentials."""
+
+    def __init__(self, credential=None, scope=None):
+        self.credential = credential or DefaultAzureCredential()
+        self.scope = scope or REDIS_ENTRA_TOKEN_SCOPE
+        self._cached_credentials = None
+        self._expires_on = 0
+
+    def get_credentials(self):
+        now = time.time()
+        if self._cached_credentials and now < self._expires_on - REDIS_TOKEN_REFRESH_BUFFER_SECONDS:
+            return self._cached_credentials
+
+        token = self.credential.get_token(self.scope)
+        username = _get_redis_username_from_claims(token.token)
+        self._cached_credentials = (username, token.token)
+        self._expires_on = token.expires_on
+        return self._cached_credentials
+
+
+def create_redis_managed_identity_client(redis_url, settings=None, **redis_kwargs):
+    credential_provider = RedisManagedIdentityCredentialProvider(
+        scope=_get_redis_entra_token_scope(settings)
+    )
+    return Redis(
+        host=redis_url,
+        port=6380,
+        db=0,
+        credential_provider=credential_provider,
+        ssl=True,
+        **redis_kwargs
+    )
 
 
 def _get_expiration_timestamp(ttl_seconds=None):
@@ -147,15 +211,9 @@ def configure_app_cache(settings, redis_cache_endpoint=None):
         redis_auth_type = settings.get('redis_auth_type', 'key').strip().lower()
         if redis_auth_type == 'managed_identity':
             log_event("[ASC] Redis enabled using Managed Identity", level=logging.INFO)
-            credential = DefaultAzureCredential()
-            cache_endpoint = redis_cache_endpoint
-            token = credential.get_token(cache_endpoint)
-            redis_client = Redis(
-                host=redis_url,
-                port=6380,
-                db=0,
-                password=token.token,
-                ssl=True
+            redis_client = create_redis_managed_identity_client(
+                redis_url,
+                settings=settings
             )
         elif redis_auth_type == 'key_vault':
             log_event("[ASC] Redis enabled using Key Vault Secret", level=logging.INFO)

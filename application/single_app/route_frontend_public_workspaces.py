@@ -7,16 +7,16 @@ from functions_settings import *
 from functions_file_sync import FILE_SYNC_MANAGER_ROLES, assert_public_workspace_role, is_file_sync_enabled_for_public_workspace
 from swagger_wrapper import swagger_route, get_auth_security
 
-def register_route_frontend_public_workspaces(app):
-    @app.route("/my_public_workspaces", methods=["GET"])
+def register_route_frontend_public_workspaces(bp):
+    @bp.route("/my_public_workspaces", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
     @enabled_required("enable_public_workspaces")
     def my_public_workspaces():
-        return redirect(url_for('profile', tab='public-workspaces'))
+        return redirect(url_for('frontend_profile.profile', tab='public-workspaces'))
 
-    @app.route("/public_workspaces/<workspace_id>", methods=["GET"])
+    @bp.route("/public_workspaces/<workspace_id>", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -39,7 +39,7 @@ def register_route_frontend_public_workspaces(app):
             file_sync_enabled=file_sync_enabled
         )
     
-    @app.route("/public_workspaces", methods=["GET"])
+    @bp.route("/public_workspaces", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -76,7 +76,7 @@ def register_route_frontend_public_workspaces(app):
             allowed_extensions=allowed_extensions_str
         )
 
-    @app.route("/public_directory", methods=["GET"])
+    @bp.route("/public_directory", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -95,7 +95,7 @@ def register_route_frontend_public_workspaces(app):
             app_settings=public_settings
         )
 
-    @app.route('/set_active_public_workspace', methods=['POST'])
+    @bp.route('/set_active_public_workspace', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -111,4 +111,4 @@ def register_route_frontend_public_workspaces(app):
         except LookupError:
             return "Workspace not found", 404
 
-        return redirect(url_for('public_workspaces'))
+        return redirect(url_for('frontend_public_workspaces.public_workspaces'))

@@ -57,7 +57,8 @@ scripts/me.json
 
 
 deploy.zip
+.azure/deployment-plan.md
 application/teams_app/manifest.json
 application/teams_app/*.zip
 
-local_storage_state.json 
+local_storage_state.json

@@ -1704,6 +1704,116 @@ def apply_custom_endpoint_setting_migration(settings_item):
 
     return updated
 
+
+def normalize_model_endpoint_management_cloud(value):
+    """Return the canonical management cloud value for model endpoint auth."""
+    normalized_value = str(value or "").strip().lower()
+    if normalized_value in {"government", "usgovernment", "usgov", "gov", "gcc"}:
+        return "government"
+    if normalized_value == "custom":
+        return "custom"
+    return "public"
+
+
+def get_model_endpoint_management_cloud_for_environment(environment=None):
+    """Resolve the app environment into the model endpoint management cloud."""
+    environment_value = AZURE_ENVIRONMENT if environment is None else environment
+    return normalize_model_endpoint_management_cloud(environment_value)
+
+
+def is_model_endpoint_management_cloud_user_editable(endpoint_provider, endpoint_auth_type):
+    """Return True when the UI intentionally lets users choose endpoint cloud."""
+    provider = str(endpoint_provider or "").strip().lower()
+    auth_type = str(endpoint_auth_type or "").strip().lower()
+    return provider in {"aifoundry", "new_foundry"} and auth_type == "service_principal"
+
+
+def get_model_endpoint_default_custom_authority():
+    """Return the app-level authority used when model endpoints inherit custom cloud."""
+    if get_model_endpoint_management_cloud_for_environment() != "custom":
+        return ""
+    return str(authority or "").strip()
+
+
+def get_model_endpoint_default_foundry_scope():
+    """Return the app-level Foundry token scope for endpoint auth defaults."""
+    management_cloud = get_model_endpoint_management_cloud_for_environment()
+    if management_cloud == "government":
+        return "https://ai.azure.us/.default"
+    if management_cloud == "custom":
+        return str(cognitive_services_scope or "").strip()
+    return "https://ai.azure.com/.default"
+
+
+def resolve_model_endpoint_foundry_scope(auth_settings, endpoint=None):
+    """Resolve the Foundry token scope for a saved model endpoint auth payload."""
+    auth_settings = auth_settings or {}
+    custom_scope = str(auth_settings.get("foundry_scope") or "").strip()
+    if custom_scope:
+        return custom_scope
+
+    management_cloud = normalize_model_endpoint_management_cloud(auth_settings.get("management_cloud"))
+    if management_cloud == "government":
+        return "https://ai.azure.us/.default"
+    if management_cloud == "custom":
+        default_scope = get_model_endpoint_default_foundry_scope()
+        if default_scope:
+            return default_scope
+        raise ValueError("Foundry scope is required for custom cloud model endpoint authentication.")
+
+    endpoint_value = str(endpoint or "").lower()
+    if "azure.us" in endpoint_value:
+        return "https://ai.azure.us/.default"
+    if "azure.cn" in endpoint_value:
+        return "https://ai.azure.cn/.default"
+    if "azure.de" in endpoint_value:
+        return "https://ai.azure.de/.default"
+
+    return "https://ai.azure.com/.default"
+
+
+def normalize_model_endpoint_auth_for_environment(endpoint_copy):
+    """Normalize endpoint auth cloud fields that are owned by app environment."""
+    if not isinstance(endpoint_copy, dict):
+        return False
+
+    changed = False
+    auth = endpoint_copy.get("auth")
+    if not isinstance(auth, dict):
+        auth = {}
+        endpoint_copy["auth"] = auth
+        changed = True
+
+    provider = str(endpoint_copy.get("provider") or "").strip().lower()
+    auth_type = str(auth.get("type") or "").strip().lower()
+    current_cloud = normalize_model_endpoint_management_cloud(auth.get("management_cloud"))
+    default_cloud = get_model_endpoint_management_cloud_for_environment()
+    cloud_user_editable = is_model_endpoint_management_cloud_user_editable(provider, auth_type)
+
+    if not cloud_user_editable or not auth.get("management_cloud"):
+        if auth.get("management_cloud") != default_cloud:
+            auth["management_cloud"] = default_cloud
+            changed = True
+        current_cloud = default_cloud
+    elif auth.get("management_cloud") != current_cloud:
+        auth["management_cloud"] = current_cloud
+        changed = True
+
+    if current_cloud == "custom" and not cloud_user_editable:
+        custom_authority = get_model_endpoint_default_custom_authority()
+        if custom_authority and auth.get("custom_authority") != custom_authority:
+            auth["custom_authority"] = custom_authority
+            changed = True
+
+        if provider in {"aifoundry", "new_foundry", "anthropic", "claude"}:
+            foundry_scope = get_model_endpoint_default_foundry_scope()
+            if foundry_scope and auth.get("foundry_scope") != foundry_scope:
+                auth["foundry_scope"] = foundry_scope
+                changed = True
+
+    return changed
+
+
 def normalize_model_endpoints(endpoints):
     """Normalize model endpoints with stable IDs and enabled flags."""
     if not isinstance(endpoints, list):
@@ -1728,6 +1838,9 @@ def normalize_model_endpoints(endpoints):
 
         if endpoint_copy.get("enabled") is None:
             endpoint_copy["enabled"] = True
+            changed = True
+
+        if normalize_model_endpoint_auth_for_environment(endpoint_copy):
             changed = True
 
         models = endpoint_copy.get("models") or []

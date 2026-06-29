@@ -88,7 +88,7 @@ from functions_public_workspaces import get_user_visible_public_workspace_ids_fr
 from functions_search_service import resolve_document_context, search_documents
 from functions_search import normalize_search_id_list, normalize_search_scope, normalize_search_top_n
 from functions_simplechat_operations import upload_generated_analysis_artifact_for_current_user
-from functions_settings import get_settings, get_user_settings, is_tabular_processing_enabled, normalize_model_endpoints
+from functions_settings import get_settings, get_user_settings, is_tabular_processing_enabled, normalize_model_endpoints, resolve_model_endpoint_foundry_scope
 from functions_source_review import (
     URL_ACCESS_CONTEXT_WORKFLOW,
     compact_source_review_result_for_metadata,
@@ -3170,26 +3170,7 @@ def _resolve_authority(auth_settings):
 
 
 def _resolve_foundry_scope(auth_settings, endpoint=None):
-    custom_scope = (auth_settings.get('foundry_scope') or '').strip()
-    if custom_scope:
-        return custom_scope
-
-    management_cloud = (auth_settings.get('management_cloud') or 'public').lower()
-    if management_cloud in ('government', 'usgovernment', 'usgov'):
-        return 'https://ai.azure.us/.default'
-    if management_cloud == 'china':
-        return 'https://ai.azure.cn/.default'
-    if management_cloud == 'germany':
-        return 'https://ai.azure.de/.default'
-
-    endpoint_value = (endpoint or '').lower()
-    if 'azure.us' in endpoint_value:
-        return 'https://ai.azure.us/.default'
-    if 'azure.cn' in endpoint_value:
-        return 'https://ai.azure.cn/.default'
-    if 'azure.de' in endpoint_value:
-        return 'https://ai.azure.de/.default'
-    return 'https://ai.azure.com/.default'
+    return resolve_model_endpoint_foundry_scope(auth_settings, endpoint=endpoint)
 
 
 def _build_workflow_credential(auth_settings):

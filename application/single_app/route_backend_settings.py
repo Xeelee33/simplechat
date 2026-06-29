@@ -188,8 +188,8 @@ def auto_fix_index_fields(idx_type: str, user_id: str = 'system', admin_email: s
         return {'error': str(e)}
 
 
-def register_route_backend_settings(app):
-    @app.route('/api/admin/settings/check_index_fields', methods=['POST'])
+def register_route_backend_settings(bp):
+    @bp.route('/api/admin/settings/check_index_fields', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -297,18 +297,18 @@ def register_route_backend_settings(app):
                         'needsCreation': True
                     }), 404
                 else:
-                    app.logger.error(f"Azure AI Search error: {search_error}")
+                    current_app.logger.error(f"Azure AI Search error: {search_error}")
                     return jsonify({
                         'error': f'Failed to connect to Azure AI Search: {str(search_error)}',
                         'needsConfiguration': True
                     }), 500
 
         except Exception as e:
-            app.logger.error(f"Error in check_index_fields: {str(e)}")
+            current_app.logger.error(f"Error in check_index_fields: {str(e)}")
             return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
 
 
-    @app.route('/api/admin/settings/fix_index_fields', methods=['POST'])
+    @bp.route('/api/admin/settings/fix_index_fields', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -388,7 +388,7 @@ def register_route_backend_settings(app):
         except Exception as e:
             return jsonify({ 'error': str(e) }), 500
 
-    @app.route('/api/admin/settings/create_index', methods=['POST'])
+    @bp.route('/api/admin/settings/create_index', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -436,7 +436,7 @@ def register_route_backend_settings(app):
                 pass
             except Exception as e:
                 # Other errors checking if index exists
-                app.logger.error(f"Error checking if index exists: {e}")
+                current_app.logger.error(f"Error checking if index exists: {e}")
                 # Continue with creation attempt anyway
 
             # Create the index using the JSON definition
@@ -454,10 +454,10 @@ def register_route_backend_settings(app):
             }), 200
 
         except Exception as e:
-            app.logger.error(f"Error creating index: {str(e)}")
+            current_app.logger.error(f"Error creating index: {str(e)}")
             return jsonify({'error': f'Failed to create index: {str(e)}'}), 500
     
-    @app.route('/api/admin/settings/test_connection', methods=['POST'])
+    @bp.route('/api/admin/settings/test_connection', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -518,7 +518,7 @@ def register_route_backend_settings(app):
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
-    @app.route('/api/admin/settings/cosmos-throughput/status', methods=['GET'])
+    @bp.route('/api/admin/settings/cosmos-throughput/status', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -560,7 +560,7 @@ def register_route_backend_settings(app):
             )
             return jsonify({'error': 'Failed to load Cosmos throughput status.'}), 500
 
-    @app.route('/api/admin/settings/cosmos-throughput/validate-access', methods=['POST'])
+    @bp.route('/api/admin/settings/cosmos-throughput/validate-access', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -617,7 +617,7 @@ def register_route_backend_settings(app):
             )
             return jsonify({'error': 'Failed to validate Cosmos throughput access.'}), 500
 
-    @app.route('/api/admin/settings/cosmos-throughput/scale', methods=['POST'])
+    @bp.route('/api/admin/settings/cosmos-throughput/scale', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -685,7 +685,7 @@ def register_route_backend_settings(app):
             )
             return jsonify({'error': 'Failed to scale Cosmos throughput.'}), 500
 
-    @app.route('/api/admin/settings/cosmos-throughput/convert-autoscale', methods=['POST'])
+    @bp.route('/api/admin/settings/cosmos-throughput/convert-autoscale', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -765,7 +765,7 @@ def register_route_backend_settings(app):
             )
             return jsonify({'error': 'Cosmos throughput mode conversion failed.'}), 500
 
-    @app.route('/api/admin/settings/send_feedback_email', methods=['POST'])
+    @bp.route('/api/admin/settings/send_feedback_email', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required
@@ -828,7 +828,7 @@ def register_route_backend_settings(app):
             )
             return jsonify({'error': 'Failed to prepare feedback email'}), 500
 
-    @app.route('/api/support/send_feedback_email', methods=['POST'])
+    @bp.route('/api/support/send_feedback_email', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -904,7 +904,7 @@ def register_route_backend_settings(app):
             )
             return jsonify({'error': 'Failed to prepare feedback email'}), 500
 
-    @app.route('/api/admin/settings/release_notifications_registration', methods=['POST'])
+    @bp.route('/api/admin/settings/release_notifications_registration', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @admin_required

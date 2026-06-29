@@ -271,7 +271,7 @@ def _create_group_document_share_decision_notification(
         },
     )
 
-def register_route_backend_group_documents(app):
+def register_route_backend_group_documents(bp):
     """
     Provides backend routes for group-level document management:
     - GET /api/group_documents      (list)
@@ -279,7 +279,7 @@ def register_route_backend_group_documents(app):
     - DELETE /api/group_documents/<doc_id>
     """
 
-    @app.route('/api/group_documents/upload', methods=['POST'])
+    @bp.route('/api/group_documents/upload', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -397,7 +397,7 @@ def register_route_backend_group_documents(app):
         }), response_status
 
 
-    @app.route('/api/group_documents', methods=['GET'])
+    @bp.route('/api/group_documents', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -661,7 +661,7 @@ def register_route_backend_group_documents(app):
             "needs_legacy_update_check": legacy_count > 0
         }), 200
 
-    @app.route('/api/group_documents/<document_id>', methods=['GET'])
+    @bp.route('/api/group_documents/<document_id>', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -689,7 +689,7 @@ def register_route_backend_group_documents(app):
 
         return get_document(user_id=user_id, document_id=document_id, group_id=active_group_id)
 
-    @app.route('/api/group_documents/<document_id>/versions', methods=['GET'])
+    @bp.route('/api/group_documents/<document_id>/versions', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -753,7 +753,7 @@ def register_route_backend_group_documents(app):
             return None, None, (jsonify({'error': 'Document not found or access denied'}), 404)
         return active_group_id, document_record, None
 
-    @app.route('/api/group_documents/<document_id>/download', methods=['GET'])
+    @bp.route('/api/group_documents/<document_id>/download', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -779,7 +779,7 @@ def register_route_backend_group_documents(app):
             )
             return jsonify({'error': 'Unable to download document'}), 500
 
-    @app.route('/api/group_documents/download', methods=['POST'])
+    @bp.route('/api/group_documents/download', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -837,7 +837,7 @@ def register_route_backend_group_documents(app):
             )
             return jsonify({'error': 'Unable to download selected documents'}), 500
 
-    @app.route('/api/group_documents/<document_id>', methods=['PATCH'])
+    @bp.route('/api/group_documents/<document_id>', methods=['PATCH'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -980,7 +980,7 @@ def register_route_backend_group_documents(app):
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
-    @app.route('/api/group_documents/<document_id>', methods=['DELETE'])
+    @bp.route('/api/group_documents/<document_id>', methods=['DELETE'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1062,7 +1062,7 @@ def register_route_backend_group_documents(app):
         except Exception as e:
             return jsonify({'error': f'Error deleting group document: {str(e)}'}), 500
 
-    @app.route('/api/group_documents/<document_id>/extract_metadata', methods=['POST'])
+    @bp.route('/api/group_documents/<document_id>/extract_metadata', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1102,7 +1102,7 @@ def register_route_backend_group_documents(app):
             'document_id': document_id
         }), 200
 
-    @app.route('/api/group_documents/reprocess_extraction', methods=['POST'])
+    @bp.route('/api/group_documents/reprocess_extraction', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1194,7 +1194,7 @@ def register_route_backend_group_documents(app):
             'errors': errors,
         }), status_code
 
-    @app.route('/api/group_documents/upgrade_legacy', methods=['POST'])
+    @bp.route('/api/group_documents/upgrade_legacy', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1218,7 +1218,7 @@ def register_route_backend_group_documents(app):
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
-    @app.route('/api/group_documents/<document_id>/shared-groups', methods=['GET'])
+    @bp.route('/api/group_documents/<document_id>/shared-groups', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1283,7 +1283,7 @@ def register_route_backend_group_documents(app):
         except Exception as e:
             return jsonify({'error': f'Error retrieving shared groups: {str(e)}'}), 500
 
-    @app.route('/api/group_documents/<document_id>/approve-share-with-group', methods=['POST'])
+    @bp.route('/api/group_documents/<document_id>/approve-share-with-group', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1364,7 +1364,7 @@ def register_route_backend_group_documents(app):
         except Exception as e:
             return jsonify({'error': f'Error approving shared document: {str(e)}'}), 500
 
-    @app.route('/api/group_documents/<document_id>/approve-generated-artifact', methods=['POST'])
+    @bp.route('/api/group_documents/<document_id>/approve-generated-artifact', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1478,7 +1478,7 @@ def register_route_backend_group_documents(app):
         except Exception as e:
             return jsonify({'error': f'Error approving generated artifact: {str(e)}'}), 500
 
-    @app.route('/api/group_documents/<document_id>/deny-generated-artifact', methods=['POST'])
+    @bp.route('/api/group_documents/<document_id>/deny-generated-artifact', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1560,7 +1560,7 @@ def register_route_backend_group_documents(app):
         except Exception as e:
             return jsonify({'error': f'Error denying generated artifact: {str(e)}'}), 500
 
-    @app.route('/api/group_documents/<document_id>/cancel-generated-artifact', methods=['POST'])
+    @bp.route('/api/group_documents/<document_id>/cancel-generated-artifact', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1620,7 +1620,7 @@ def register_route_backend_group_documents(app):
         except Exception as e:
             return jsonify({'error': f'Error canceling generated artifact: {str(e)}'}), 500
 
-    @app.route('/api/group_documents/<document_id>/share-with-group', methods=['POST'])
+    @bp.route('/api/group_documents/<document_id>/share-with-group', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1732,7 +1732,7 @@ def register_route_backend_group_documents(app):
         except Exception as e:
             return jsonify({'error': f'Error sharing document: {str(e)}'}), 500
 
-    @app.route('/api/group_documents/<document_id>/unshare-with-group', methods=['DELETE'])
+    @bp.route('/api/group_documents/<document_id>/unshare-with-group', methods=['DELETE'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1801,7 +1801,7 @@ def register_route_backend_group_documents(app):
         except Exception as e:
             return jsonify({'error': f'Error unsharing document: {str(e)}'}), 500
 
-    @app.route('/api/group_documents/<document_id>/remove-self', methods=['DELETE'])
+    @bp.route('/api/group_documents/<document_id>/remove-self', methods=['DELETE'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1878,7 +1878,7 @@ def register_route_backend_group_documents(app):
         except Exception as e:
             return jsonify({'error': f'Error removing group from shared document: {str(e)}'}), 500
 
-    @app.route('/api/group_documents/tags', methods=['GET'])
+    @bp.route('/api/group_documents/tags', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1925,7 +1925,7 @@ def register_route_backend_group_documents(app):
         merged = sorted(all_tags.values(), key=lambda t: t['name'])
         return jsonify({'tags': merged}), 200
 
-    @app.route('/api/group_documents/tags', methods=['POST'])
+    @bp.route('/api/group_documents/tags', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -1995,7 +1995,7 @@ def register_route_backend_group_documents(app):
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
-    @app.route('/api/group_documents/bulk-tag', methods=['POST'])
+    @bp.route('/api/group_documents/bulk-tag', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -2118,7 +2118,7 @@ def register_route_backend_group_documents(app):
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
-    @app.route('/api/group_documents/tags/<tag_name>', methods=['PATCH'])
+    @bp.route('/api/group_documents/tags/<tag_name>', methods=['PATCH'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -2241,7 +2241,7 @@ def register_route_backend_group_documents(app):
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
-    @app.route('/api/group_documents/tags/<tag_name>', methods=['DELETE'])
+    @bp.route('/api/group_documents/tags/<tag_name>', methods=['DELETE'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required

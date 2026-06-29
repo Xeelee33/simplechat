@@ -9775,6 +9775,7 @@
     if (!Array.isArray(window.agentsPagePromotedPopularAgents)) {
         window.agentsPagePromotedPopularAgents = [];
     }
+    window.enableSemanticKernel = {{ 'true' if settings.enable_semantic_kernel else 'false' }};
     window.customPages = [];
     window.customPagesInitiallyEnabled = {{ 'true' if settings.enable_custom_pages else 'false' }};
     window.releaseNotificationsRegistration = {
@@ -10482,4 +10483,3 @@
 
 </script>
 {% endblock %}
-

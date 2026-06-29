@@ -2,9 +2,41 @@
 
 For feature-focused and fix-focused drill-downs by version, see [Features by Version](/explanation/features/) and [Fixes by Version](/explanation/fixes/).
 
+### **(v0.250.004)**
+
+#### Bug Fixes
+
+*   **Model Endpoint Management Cloud Normalization**
+    *   Fixed model endpoint saves so managed identity and other non-editable cloud paths derive `management_cloud` from `AZURE_ENVIRONMENT` instead of persisting the hidden UI default of `public`.
+    *   Added custom-cloud handling for inherited model endpoint authority and Foundry scope defaults while preserving explicit Foundry service-principal cross-cloud selections.
+    *   (Ref: model endpoint authentication, `normalize_model_endpoints`, `AZURE_ENVIRONMENT`, `test_model_endpoint_management_cloud_environment.py`)
+
+### **(v0.250.003)**
+
+#### Bug Fixes
+
+*   **Admin Settings Update Banner Version Comparison**
+    *   Fixed stale cached update-check settings so Admin Settings no longer displays an older release such as `v0.250.001` as available when the running app version is newer.
+    *   The render path now recomputes `update_available` from the cached latest version and the current app version before showing the banner.
+    *   (Ref: Admin Settings update banner, `compare_versions`, `test_admin_update_banner_version_comparison.py`)
+
 ### **(v0.250.001)**
 
 #### New Features
+
+*   **Azure Billing Dynamic Charts**
+    *   Updated the Azure Billing action chart path to return SimpleChat `simplechart` Markdown instead of server-rendered matplotlib PNG image payloads.
+    *   Preserved existing `plot_chart` / `plot_custom_chart` inputs while returning `chart_payload`, `chart_markdown`, summary, and renderer metadata for interactive chat display.
+    *   Added regression coverage for stacked and pie Azure Billing chart output.
+    *   (Ref: Azure Billing action, dynamic inline charts, `chart_markdown`, `test_azure_billing_dynamic_charts.py`)
+
+*   **Blueprint Route Security Policies**
+    *   Migrated SimpleChat route registration to Blueprint-backed route groups with explicit `before_request` authentication policies.
+    *   Added reusable Blueprint auth helpers that compose the existing login, user, admin, and external bearer-token decorators.
+    *   Added route policy tests covering Blueprint registration, unauthenticated access expectations, public/external route exceptions, and route-test completeness.
+    *   Updated route-authentication prompts, Python route instructions, PR-prep guidance, and CI route validation workflow so future route work must update and run the route policy tests.
+    *   Preserved Custom Pages as login-required with page metadata role checks layered inside the dispatcher.
+    *   (Ref: Blueprint route policies, route auth guardrails, `functional_tests/route_tests/`, `functions_authentication.py`, `app.py`)
 
 *   **Azure OpenAI Identity Setup Guidance**
     *   Added admin setup guidance explaining which identity is used for legacy Azure OpenAI model discovery and which identity or key is used for runtime GPT, embedding, and image generation calls.
@@ -63,6 +95,7 @@ For feature-focused and fix-focused drill-downs by version, see [Features by Ver
     *   Added a first-class Snowflake action type for querying Snowflake data warehouses through the Snowflake Python Connector, focused on read-only data retrieval for agent analysis, charts, generated documents, and exports.
     *   Added tailored action configuration for account, warehouse, default database/schema, role, password/key-pair/OAuth authentication, reusable workspace identities, and query execution limits.
     *   Added read-only SQL enforcement, automatic result limiting, structured column/row responses, Semantic Kernel loader integration, Key Vault secret handling, governance labels, schemas, feature documentation, and functional coverage.
+    *   Uses `snowflake-connector-python[pandas]==3.18.0` so the local Python 3.13 development environment can install from wheels without requiring native C++ build tooling.
     *   (Ref: `SnowflakePlugin`, `SnowflakePluginFactory`, Snowflake action modal, `SNOWFLAKE_ACTION.md`)
 
 *   **Workflow Per-Document Analysis and Generated Office Exports**
