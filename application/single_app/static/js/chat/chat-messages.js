@@ -1036,14 +1036,7 @@ export function appendMessage(
       });
     }
 
-    // For AI messages, only auto-scroll if the user is currently near
-    // the bottom. This prevents a final jump after a long answer if
-    // the user has scrolled up to read earlier content.
-    if (typeof isChatNearBottom === 'function' && typeof scrollChatToBottom === 'function') {
-      if (isChatNearBottom()) {
-        scrollChatToBottom();
-      }
-    }
+    scrollChatToBottom();
     return; // <<< EXIT EARLY FOR AI MESSAGES
 
     // --- Handle ALL OTHER message types ---
@@ -1113,10 +1106,7 @@ export function appendMessage(
       
       // Validate image URL before creating img tag
       if (messageContent && messageContent !== 'null' && messageContent.trim() !== '') {
-        // Use a placeholder container; the actual <img> element will be
-        // created with DOM APIs after insertion to avoid string-based
-        // attribute interpolation in src/data-*.
-        messageContentHtml = '<span class="generated-image-placeholder"></span>';
+        messageContentHtml = `<img src="${messageContent}" alt="${isUserUpload ? 'Uploaded' : 'Generated'} Image" class="generated-image" style="width: 170px; height: 170px; cursor: pointer;" data-image-src="${messageContent}" onload="scrollChatToBottom()" onerror="this.src='/static/images/image-error.png'; this.alt='Failed to load image';" />`;
       } else {
         messageContentHtml = `<div class="alert alert-warning"><i class="bi bi-exclamation-triangle me-2"></i>Failed to ${isUserUpload ? 'load' : 'generate'} image - invalid response from image service</div>`;
       }
@@ -1266,28 +1256,6 @@ export function appendMessage(
     // Append and scroll (common actions for non-AI)
     chatbox.appendChild(messageDiv);
 
-    // Attach safe image element and error handler for generated/uploaded images
-    if (sender === "image") {
-      const placeholder = messageDiv.querySelector('.generated-image-placeholder');
-      if (placeholder && messageContent && messageContent !== 'null' && messageContent.trim() !== '') {
-        const imgEl = document.createElement('img');
-        imgEl.className = 'generated-image';
-        imgEl.style.width = '170px';
-        imgEl.style.height = '170px';
-        imgEl.style.cursor = 'pointer';
-        imgEl.src = messageContent;
-        imgEl.alt = isUserUpload ? 'Uploaded Image' : 'Generated Image';
-        imgEl.dataset.imageSrc = messageContent;
-
-        imgEl.addEventListener('error', () => {
-          imgEl.src = '/static/images/image-error.png';
-          imgEl.alt = 'Failed to load image';
-        });
-
-        placeholder.replaceWith(imgEl);
-      }
-    }
-
     // Highlight code blocks in the messages
     messageDiv.querySelectorAll('pre code[class^="language-"]').forEach((block) => {
       const match = block.className.match(/language-([a-zA-Z0-9]+)/);
@@ -1410,16 +1378,7 @@ export function appendMessage(
       }
     }
 
-    // For new user/file/image messages, scroll to bottom once so the
-    // user sees what they just sent. For history loads, only scroll
-    // if they are already near the bottom.
-    if (isNewMessage && typeof scrollChatToBottom === 'function') {
-      scrollChatToBottom();
-    } else if (typeof isChatNearBottom === 'function' && typeof scrollChatToBottom === 'function') {
-      if (isChatNearBottom()) {
-        scrollChatToBottom();
-      }
-    }
+    scrollChatToBottom();
   } // End of the large 'else' block for non-AI messages
 }
 
@@ -1477,7 +1436,7 @@ export function actuallySendMessage(finalMessageToSend) {
   const tempUserMessageId = `temp_user_${Date.now()}`;
   
   // Append user message first with temporary ID
-  appendMessage("You", finalMessageToSend, null, tempUserMessageId, false, [], [], [], null, null, null, true);
+  appendMessage("You", finalMessageToSend, null, tempUserMessageId);
   userInput.value = "";
   userInput.style.height = "";
   // Update send button visibility after clearing input
