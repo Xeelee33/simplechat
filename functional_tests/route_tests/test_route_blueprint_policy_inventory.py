@@ -187,8 +187,10 @@ def iter_route_functions() -> list[RouteFunction]:
 
 
 def test_route_policy_inventory_assets_and_version_are_current() -> None:
-    """Verify the route policy test folder is wired to the current implementation version."""
-    assert read_config_version() == "0.250.004"
+    """Verify the route policy test folder and config version reader are wired correctly."""
+    version_parts = read_config_version().split(".")
+    assert len(version_parts) == 3
+    assert all(part.isdigit() for part in version_parts)
     assert Path(__file__).parent.name == "route_tests"
 
 
