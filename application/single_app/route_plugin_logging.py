@@ -4,13 +4,14 @@ API endpoints for accessing plugin invocation logs and statistics.
 """
 
 from flask import Blueprint, jsonify, request
-from functions_authentication import admin_required, login_required, get_current_user_id
+from functions_authentication import admin_required, get_current_user_id, login_required, login_required_blueprint, user_required
 from functions_appinsights import log_event
 from semantic_kernel_plugins.plugin_invocation_logger import get_plugin_logger
 from swagger_wrapper import swagger_route, get_auth_security
 import logging
 
 bpl = Blueprint('plugin_logging', __name__)
+bpl.before_request(login_required_blueprint())
 
 
 @bpl.route('/api/plugins/invocations', methods=['GET'])
@@ -18,6 +19,7 @@ bpl = Blueprint('plugin_logging', __name__)
     security=get_auth_security()
 )
 @login_required
+@user_required
 def get_plugin_invocations():
     """Get recent plugin invocations for the current user."""
     try:
@@ -33,7 +35,7 @@ def get_plugin_invocations():
         
         # Convert to dictionaries for JSON response
         response_data = {
-            "invocations": [inv.to_dict() for inv in invocations],
+            "invocations": [inv.to_safe_dict() for inv in invocations],
             "total_count": len(invocations),
             "user_id": user_id
         }
@@ -65,6 +67,7 @@ def get_plugin_invocations():
     security=get_auth_security()
 )
 @login_required
+@user_required
 def get_plugin_stats():
     """Get plugin usage statistics."""
     try:
@@ -134,7 +137,7 @@ def get_recent_invocations():
         recent_invocations = plugin_logger.get_recent_invocations(limit)
         
         response_data = {
-            "invocations": [inv.to_dict() for inv in recent_invocations],
+            "invocations": [inv.to_safe_dict() for inv in recent_invocations],
             "total_count": len(recent_invocations)
         }
         
@@ -165,6 +168,7 @@ def get_recent_invocations():
     security=get_auth_security()
 )
 @login_required
+@user_required
 def get_plugin_specific_invocations(plugin_name):
     """Get invocations for a specific plugin."""
     try:
@@ -183,7 +187,7 @@ def get_plugin_specific_invocations(plugin_name):
         
         response_data = {
             "plugin_name": plugin_name,
-            "invocations": [inv.to_dict() for inv in plugin_invocations],
+            "invocations": [inv.to_safe_dict() for inv in plugin_invocations],
             "total_count": len(plugin_invocations),
             "user_id": user_id
         }
@@ -262,6 +266,7 @@ def clear_plugin_logs():
     security=get_auth_security()
 )
 @login_required
+@user_required
 def export_plugin_logs():
     """Export plugin invocation logs for the current user."""
     try:
@@ -276,7 +281,7 @@ def export_plugin_logs():
             "export_timestamp": plugin_logger.invocations[-1].timestamp if plugin_logger.invocations else None,
             "user_id": user_id,
             "total_invocations": len(user_invocations),
-            "invocations": [inv.to_dict() for inv in user_invocations]
+            "invocations": [inv.to_safe_dict() for inv in user_invocations]
         }
         
         log_event(

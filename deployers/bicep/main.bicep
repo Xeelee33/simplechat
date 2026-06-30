@@ -5,6 +5,12 @@ targetScope = 'subscription'
 - Region must align to the target cloud environment''')
 param location string
 
+@minLength(1)
+@description('''Optional Azure region override for Azure Cache for Redis.
+- Defaults to the deployment location.
+- Use only when Redis capacity or SKU availability differs from the primary app region.''')
+param redisLocation string = location
+
 @description('''The target Azure Cloud environment.
 - Accepted values are: AzureCloud, AzureUSGovernment, public, usgovernment, custom
 - Default is based on the ARM cloud name''')
@@ -43,6 +49,16 @@ param azdEnvironmentName string
 - should be in the format <repository>:<tag>''')
 param imageName string = 'simplechat:latest'
 
+@description('''Deploy a secondary native Python App Service alongside the primary container App Service.
+- Default is false; enable only for native App Service comparison/testing.''')
+param deployNativePythonWebApp bool = false
+
+@minLength(2)
+@maxLength(60)
+@description('''Optional name for the secondary native Python Web App.
+- Used only when deployNativePythonWebApp is true.''')
+param nativeWebAppName string = toLower('${appName}-${environment}-native-app')
+
 @description('''Azure AD Application Client ID for enterprise authentication.
 - Should be the client ID of the registered Azure AD application''')
 param enterpriseAppClientId string
@@ -58,6 +74,26 @@ param enterpriseAppServicePrincipalId string
 @secure()
 param enterpriseAppClientSecret string
 
+@description('''Enable Microsoft Teams tab Single Sign-On for SimpleChat.
+- When true, the app enables Teams token exchange and allows App Service requests to reach the app-level authentication flow.
+- Teams app manifest installation and Entra app pre-authorization are still required outside this deployment.''')
+param enableTeamsSso bool = false
+
+@description('''Optional Teams frame ancestors for Content Security Policy.
+- Leave blank for built-in Azure commercial or Azure Government Teams defaults.
+- Set explicitly for custom or air-gapped Teams clouds.''')
+param teamsFrameAncestors string = ''
+
+@description('''Optional Teams SDK valid origins.
+- Accepts comma, space, or JSON-list formatted origins.
+- Leave blank to reuse the Teams frame ancestors.''')
+param customTeamsOrigins string = ''
+
+@description('''Optional Teams Application ID URI used by microsoftTeams.authentication.getAuthToken.
+- Example: api://simplechat.contoso.com/<client-id>
+- Leave blank to let the app default to api://<client-id>.''')
+param teamsAppResource string = ''
+
 //----------------
 // configurations
 @description('''Authentication type for resources that support Managed Identity or Key authentication.
@@ -69,9 +105,57 @@ param enterpriseAppClientSecret string
 ])
 param authenticationType string
 
+@description('''Authentication type for Azure Cache for Redis.
+- Defaults to the global authenticationType for backward compatibility.
+- Set to key when Redis managed identity authentication is unavailable in the target cloud.''')
+@allowed([
+ 'key'
+ 'managed_identity'
+])
+param redisAuthenticationType string = authenticationType
+
 @description('''Configure permissions (based on authenticationType) for the deployed web application to access required resources.
 ''')
 param configureApplicationPermissions bool
+
+@description('''Azure Cosmos DB capacity mode.
+- provisioned: Default. Uses dedicated container autoscale throughput for application containers.
+- serverless: Optional for short-lived MVP or evaluation environments with very low traffic.''')
+@allowed([
+  'provisioned'
+  'serverless'
+])
+param cosmosCapacityMode string = 'provisioned'
+
+@description('''Maximum RU/s for each SimpleChat Cosmos DB container when cosmosCapacityMode is provisioned.
+- Default is 1000 RU/s autoscale max per container.
+- Parameter name is retained for deployment compatibility with earlier templates.
+- Ignored when cosmosCapacityMode is serverless.''')
+@minValue(1000)
+param cosmosDatabaseAutoscaleMaxThroughput int = 1000
+
+@description('''Azure AI Search service SKU.
+- standard is Azure AI Search S1 and is the default for document search.
+- free may be used only for short-lived MVP or evaluation phases with known service limits.''')
+@allowed([
+  'free'
+  'basic'
+  'standard'
+  'standard2'
+  'standard3'
+  'storage_optimized_l1'
+  'storage_optimized_l2'
+])
+param searchSkuName string = 'standard'
+
+@description('''Azure AI Search semantic ranker SKU.
+- standard is the default so workspace search does not depend on the limited free semantic quota.
+- free may be used only for short-lived MVP or evaluation phases.''')
+@allowed([
+  'free'
+  'standard'
+])
+param searchSemanticSearchSku string = 'standard'
 
 @description('Optional object containing additional tags to apply to all resources.')
 param specialTags object = {}
@@ -203,9 +287,8 @@ param deployVideoIndexerService bool
 var rgName = '${appName}-${environment}-rg'
 var requiredTags = { application: appName, environment: environment, 'azd-env-name': azdEnvironmentName }
 var tags = union(requiredTags, specialTags)
-var isPublicCloud = scCloudEnvironment == 'public'
 var isUsGovernmentCloud = scCloudEnvironment == 'usgovernment'
-var acrCloudSuffix = isPublicCloud ? '.azurecr.io' : '.azurecr.us'
+var acrCloudSuffix = az.environment().suffixes.acrLoginServer
 var acrName = toLower('${appName}${environment}acr')
 var containerRegistry = '${acrName}${acrCloudSuffix}'
 var containerImageName = '${containerRegistry}/${imageName}'
@@ -215,9 +298,9 @@ var resolvedOpenAIDeploymentType = isUsGovernmentCloud ? 'Standard' : openAIDepl
 var defaultGptModels = [
   {
     modelName: 'gpt-4o'
-    modelVersion: isUsGovernmentCloud ? '2024-05-13' : '2024-11-20'
+    modelVersion: '2024-11-20'
     skuName: resolvedOpenAIDeploymentType
-    skuCapacity: 100
+    skuCapacity: isUsGovernmentCloud ? 20 : 100
   }
 ]
 var defaultEmbeddingModels = isUsGovernmentCloud
@@ -274,6 +357,15 @@ resource rg 'Microsoft.Resources/resourceGroups@2022-09-01' = {
   name: rgName
   location: location
   tags: tags
+}
+
+module rgDeleteLock 'modules/resourceGroupLock.bicep' = {
+  scope: rg
+  name: 'resourceGroupDeleteLock'
+  params: {
+    lockName: 'prevent-accidental-delete'
+    lockNotes: 'Prevents accidental deletion of the SimpleChat staging resource group.'
+  }
 }
 
 //=========================================================
@@ -378,6 +470,8 @@ module cosmosDB 'modules/cosmosDb.bicep' = {
 
     enablePrivateNetworking: enablePrivateNetworking
     allowedIpAddresses: cosmosDbIpRules
+    capacityMode: cosmosCapacityMode
+    containerAutoscaleMaxThroughput: cosmosDatabaseAutoscaleMaxThroughput
   }
 }
 
@@ -414,6 +508,8 @@ module searchService 'modules/search.bicep' = {
     logAnalyticsId: logAnalytics.outputs.logAnalyticsId
 
     enablePrivateNetworking: enablePrivateNetworking
+    skuName: searchSkuName
+    semanticSearchSku: searchSemanticSearchSku
   }
 }
 
@@ -524,9 +620,52 @@ module appService 'modules/appService.bicep' = {
     appInsightsName: applicationInsights.outputs.appInsightsName
     enterpriseAppClientId: enterpriseAppClientId
     enterpriseAppClientSecret: enterpriseAppClientSecret
+    enableTeamsSso: enableTeamsSso
+    teamsFrameAncestors: teamsFrameAncestors
+    customTeamsOrigins: customTeamsOrigins
+    teamsAppResource: teamsAppResource
     authenticationType: authenticationType
     keyVaultUri: keyVault.outputs.keyVaultUri
 
+    enablePrivateNetworking: enablePrivateNetworking
+    appServiceSubnetId: resolvedAppServiceSubnetId
+
+    // --- Custom Azure Environment Parameters (for 'custom' azureEnvironment) ---
+    customBlobStorageSuffix: customBlobStorageSuffix
+    customGraphUrl: customGraphUrl
+    customIdentityUrl: customIdentityUrl
+    customResourceManagerUrl: customResourceManagerUrl
+    customCognitiveServicesScope: customCognitiveServicesScope
+    customSearchResourceUrl: customSearchResourceUrl
+    customVideoIndexerEndpoint: resolvedVideoIndexerEndpoint
+  }
+}
+
+//=========================================================
+// Create Optional App Service (Native Python)
+//=========================================================
+module nativeAppService 'modules/appServiceNativePython.bicep' = if (deployNativePythonWebApp) {
+  name: 'nativeAppService'
+  scope: rg
+  params: {
+    location: location
+    nativeWebAppName: nativeWebAppName
+    tags: tags
+    enableDiagLogging: enableDiagLogging
+    logAnalyticsId: logAnalytics.outputs.logAnalyticsId
+    appServicePlanId: appServicePlan.outputs.appServicePlanId
+    azurePlatform: scCloudEnvironment
+    cosmosDbName: cosmosDB.outputs.cosmosDbName
+    searchServiceName: searchService.outputs.searchServiceName
+    openAiServiceName: openAI.outputs.openAIName
+    openAiEndpoint: openAI.outputs.openAIEndpoint
+    openAiResourceGroupName: openAI.outputs.openAIResourceGroup
+    documentIntelligenceServiceName: docIntel.outputs.documentIntelligenceServiceName
+    appInsightsName: applicationInsights.outputs.appInsightsName
+    enterpriseAppClientId: enterpriseAppClientId
+    enterpriseAppClientSecret: enterpriseAppClientSecret
+    authenticationType: authenticationType
+    keyVaultUri: keyVault.outputs.keyVaultUri
     enablePrivateNetworking: enablePrivateNetworking
     appServiceSubnetId: resolvedAppServiceSubnetId
 
@@ -570,9 +709,10 @@ module redisCache 'modules/redisCache.bicep' = if (deployRedisCache) {
   name: 'redisCache'
   scope: rg
   params: {
-    location: location
+    location: redisLocation
     appName: appName
     environment: environment
+    redisAuthenticationType: redisAuthenticationType
     tags: tags
     enableDiagLogging: enableDiagLogging
     logAnalyticsId: logAnalytics.outputs.logAnalyticsId
@@ -631,6 +771,7 @@ module setPermissions 'modules/setPermissions.bicep' = if (configureApplicationP
 
     webAppName: appService.outputs.name
     authenticationType: authenticationType
+    redisAuthenticationType: redisAuthenticationType
     enterpriseAppServicePrincipalId: enterpriseAppServicePrincipalId
     keyVaultName: keyVault.outputs.keyVaultName
     cosmosDBName: cosmosDB.outputs.cosmosDbName
@@ -652,6 +793,34 @@ module setPermissions 'modules/setPermissions.bicep' = if (configureApplicationP
     videoIndexerName: deployVideoIndexerService ? videoIndexerService.outputs.videoIndexerServiceName : ''
     videoIndexerSupportsOpenAiIntegration: videoIndexerSupportsOpenAiIntegration
   }
+}
+
+module setNativeWebAppPermissions 'modules/setNativeWebAppPermissions.bicep' = if (configureApplicationPermissions && deployNativePythonWebApp) {
+  name: 'setNativeWebAppPermissions'
+  scope: rg
+  params: {
+    #disable-next-line BCP318 // module exists when deployNativePythonWebApp is true
+    nativeWebAppName: nativeAppService.outputs.name
+    authenticationType: authenticationType
+    redisAuthenticationType: redisAuthenticationType
+    keyVaultName: keyVault.outputs.keyVaultName
+    cosmosDBName: cosmosDB.outputs.cosmosDbName
+    openAIName: openAI.outputs.openAIName
+    openAIResourceGroupName: openAI.outputs.openAIResourceGroup
+    openAISubscriptionId: openAI.outputs.openAISubscriptionId
+    docIntelName: docIntel.outputs.documentIntelligenceServiceName
+    storageAccountName: storageAccount.outputs.name
+    searchServiceName: searchService.outputs.searchServiceName
+    #disable-next-line BCP318 // expect one value to be null
+    speechServiceName: deploySpeechService ? speechService.outputs.speechServiceName : ''
+    #disable-next-line BCP318 // expect one value to be null
+    redisCacheName: deployRedisCache ? redisCache.outputs.redisCacheName : ''
+    #disable-next-line BCP318 // expect one value to be null
+    contentSafetyName: deployContentSafety ? contentSafety.outputs.contentSafetyName : ''
+  }
+  dependsOn: [
+    setPermissions
+  ]
 }
 
 //=========================================================
@@ -701,6 +870,7 @@ module privateNetworking 'modules/privateNetworking.bicep' = if (enablePrivateNe
 // output values required for postprovision script in azure.yaml
 output var_acrName string = toLower('${appName}${environment}acr')
 output var_authenticationType string = toLower(authenticationType)
+output var_redisAuthenticationType string = toLower(redisAuthenticationType)
 output var_blobStorageEndpoint string = storageAccount.outputs.endpoint
 output var_configureApplication bool = configureApplicationPermissions
 #disable-next-line BCP318 // expect one value to be null
@@ -739,7 +909,8 @@ output var_imageTag string = contains(imageName, ':')
   : 'latest'
 
 output var_webService string = appService.outputs.name
+#disable-next-line BCP318 // expect one value to be null
+output var_nativeWebService string = deployNativePythonWebApp ? nativeAppService.outputs.name : ''
 
 // output values required for postup script in azure.yaml
 output var_enablePrivateNetworking bool = enablePrivateNetworking
-

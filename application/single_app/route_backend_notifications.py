@@ -7,9 +7,9 @@ from functions_notifications import *
 from swagger_wrapper import swagger_route, get_auth_security
 from functions_debug import debug_print
 
-def register_route_backend_notifications(app):
+def register_route_backend_notifications(bp):
 
-    @app.route("/api/notifications", methods=["GET"])
+    @bp.route("/api/notifications", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -59,7 +59,7 @@ def register_route_backend_notifications(app):
                 'error': 'Failed to fetch notifications'
             }), 500
 
-    @app.route("/api/notifications/count", methods=["GET"])
+    @bp.route("/api/notifications/count", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -83,7 +83,31 @@ def register_route_backend_notifications(app):
                 'count': 0
             }), 500
 
-    @app.route("/api/notifications/<notification_id>/read", methods=["POST"])
+    @bp.route("/api/notifications/workflow-alerts", methods=["GET"])
+    @swagger_route(security=get_auth_security())
+    @login_required
+    @user_required
+    def api_get_workflow_alert_notifications():
+        """Get unread workflow alert notifications for the current user."""
+        try:
+            user_id = get_current_user_id()
+            limit = int(request.args.get('limit', 5))
+            if limit < 1 or limit > 10:
+                limit = 5
+
+            notifications = get_unread_workflow_priority_notifications(user_id, limit=limit)
+            return jsonify({
+                'success': True,
+                'notifications': notifications,
+            })
+        except Exception as e:
+            debug_print(f"Error fetching workflow alert notifications: {e}")
+            return jsonify({
+                'success': False,
+                'notifications': [],
+            }), 500
+
+    @bp.route("/api/notifications/<notification_id>/read", methods=["POST"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -113,7 +137,7 @@ def register_route_backend_notifications(app):
                 'error': 'Internal server error'
             }), 500
 
-    @app.route("/api/notifications/<notification_id>/dismiss", methods=["DELETE"])
+    @bp.route("/api/notifications/<notification_id>/dismiss", methods=["DELETE"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -143,7 +167,7 @@ def register_route_backend_notifications(app):
                 'error': 'Internal server error'
             }), 500
 
-    @app.route("/api/notifications/mark-all-read", methods=["POST"])
+    @bp.route("/api/notifications/mark-all-read", methods=["POST"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -168,7 +192,7 @@ def register_route_backend_notifications(app):
                 'error': 'Internal server error'
             }), 500
 
-    @app.route("/api/notifications/settings", methods=["POST"])
+    @bp.route("/api/notifications/settings", methods=["POST"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required

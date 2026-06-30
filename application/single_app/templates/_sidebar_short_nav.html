@@ -1,4 +1,9 @@
 {# Sidebar Navigation Partial - Short version without brand/logo #}
+{% set sidebar_toggle_style = user_settings.get('settings', {}).get('sidebarToggleStyle', 'large') %}
+{% set sidebar_toggle_compact = sidebar_toggle_style == 'compact' %}
+{% set sidebar_menu_state_raw = user_settings.get('settings', {}).get('sidebarMenuState', {}) %}
+{% set sidebar_menu_state = sidebar_menu_state_raw if sidebar_menu_state_raw is mapping else {} %}
+{% set sidebar_settings = settings if settings is defined else app_settings %}
 <div id="sidebar-nav" class="d-flex flex-column bg-light border-end sidebar-expanded chat-sidebar-nav offcanvas-lg offcanvas-start" tabindex="-1" aria-labelledby="chatSidebarDrawerLabel" data-navigation-drawer="chat-rail">
 
   <div class="offcanvas-header chat-sidebar-mobile-header">
@@ -13,7 +18,17 @@
     <i class="bi bi-grip-vertical"></i>
   </div>
 
-  <div class="sidebar-short-header chat-sidebar-desktop-header p-3 border-bottom flex-shrink-0">
+  <div class="sidebar-short-header chat-sidebar-desktop-header p-3 border-bottom flex-shrink-0{% if sidebar_toggle_compact %} sidebar-short-header-compact-toggle{% endif %}">
+    {% if sidebar_toggle_compact %}
+    <button type="button" id="sidebar-toggle-btn" class="btn btn-sm sidebar-toggle-control sidebar-toggle-compact"
+            data-sidebar-toggle="toggle"
+            aria-controls="sidebar-nav"
+            aria-expanded="true"
+            aria-label="Hide navigation"
+            title="Hide navigation">
+      <i id="sidebar-toggle-icon" class="bi bi-layout-sidebar" aria-hidden="true"></i>
+    </button>
+    {% else %}
     <button type="button" id="sidebar-toggle-btn" class="btn btn-sm btn-outline-secondary w-100 sidebar-toggle-control"
             data-sidebar-toggle="toggle"
             aria-controls="sidebar-nav"
@@ -23,6 +38,7 @@
       <i id="sidebar-toggle-icon" class="bi bi-chevron-bar-left" aria-hidden="true"></i>
       <span class="sidebar-toggle-label">Hide navigation</span>
     </button>
+    {% endif %}
   </div>
   
   <div id="sidebar-content" class="flex-grow-1 d-flex flex-column overflow-auto">
@@ -32,23 +48,28 @@
         <div class="top-nav-mobile-section-label">Workspace</div>
         <div class="list-group list-group-flush top-nav-mobile-list">
           {% if app_settings.enable_user_workspace %}
-          <a class="list-group-item list-group-item-action" href="{{ url_for('workspace') }}">
+          <a class="list-group-item list-group-item-action" href="{{ url_for('frontend_workspace.workspace') }}">
             <i class="bi bi-person-workspace me-2"></i>Personal
           </a>
           {% endif %}
           {% if app_settings.enable_group_workspaces %}
-          <a class="list-group-item list-group-item-action" href="{{ url_for('group_workspaces') }}">
+          <a class="list-group-item list-group-item-action" href="{{ url_for('frontend_group_workspaces.group_workspaces') }}">
             <i class="bi bi-people me-2"></i>Groups
           </a>
           {% endif %}
           {% if app_settings.enable_public_workspaces %}
-          <a class="list-group-item list-group-item-action" href="{{ url_for('public_directory') }}">
+          <a class="list-group-item list-group-item-action" href="{{ url_for('frontend_public_workspaces.public_directory') }}">
             <i class="bi bi-globe-americas me-2"></i>Public
           </a>
           {% endif %}
-          <a class="list-group-item list-group-item-action" href="{{ url_for('chats') }}">
+          <a class="list-group-item list-group-item-action" href="{{ url_for('frontend_chats.chats') }}">
             <i class="bi bi-chat-dots me-2"></i>Chat
           </a>
+          {% if sidebar_settings.enable_semantic_kernel %}
+          <a class="list-group-item list-group-item-action" href="{{ url_for('frontend_agents.agents') }}">
+            <i class="bi bi-robot me-2"></i>Agents
+          </a>
+          {% endif %}
         </div>
       </div>
 
@@ -70,16 +91,23 @@
     <ul class="nav flex-column">
       {% if session.get('user') and session['user'].get('roles') and ('Admin' in session['user']['roles'] or 'User' in session['user']['roles']) %}
         <li class="nav-item">
-          {% if request.endpoint == 'chats' %}
+          {% if request.endpoint == 'frontend_chats.chats' %}
           <button class="nav-link" id="sidebar-new-chat-btn" title="Start a new chat" style="background: none; border: none; text-align: left; width: 100%;">
             <i class="bi bi-chat-right-text me-2"></i><span class="nav-text">New Chat</span>
           </button>
           {% else %}
-          <a class="nav-link" href="{{ url_for('chats') }}">
+          <a class="nav-link" href="{{ url_for('frontend_chats.chats') }}">
             <i class="bi bi-chat-square-text me-2"></i><span class="nav-text">Chat</span>
           </a>
           {% endif %}
         </li>
+        {% if sidebar_settings.enable_semantic_kernel %}
+        <li class="nav-item">
+          <a class="nav-link d-flex align-items-center" href="{{ url_for('frontend_agents.agents') }}">
+            <i class="bi bi-robot me-2"></i><span class="nav-text">Agents</span>
+          </a>
+        </li>
+        {% endif %}
       {% endif %}
     </ul>
 
@@ -89,16 +117,17 @@
     {% set show_support_latest_features = app_settings.enable_support_latest_features and app_settings.support_latest_features_has_visible_items %}
     {% set show_support_send_feedback = app_settings.enable_support_send_feedback and app_settings.support_feedback_recipient_configured %}
     {% if show_support_latest_features or show_support_send_feedback %}
+    {% set support_menu_expanded = sidebar_menu_state.get('support', true) %}
     <div class="overflow-auto">
-      <div id="support-menu-toggle" class="mt-2 mb-1 ps-3 pe-2 text-muted small d-flex align-items-center" style="font-weight: 500; letter-spacing: 0.02em; cursor: pointer; user-select: none;">
+      <div id="support-menu-toggle" class="mt-2 mb-1 ps-3 pe-2 text-muted small d-flex align-items-center" style="font-weight: 500; letter-spacing: 0.02em; cursor: pointer; user-select: none;" role="button" tabindex="0" aria-controls="support-menu-links-section" aria-expanded="{{ 'true' if support_menu_expanded else 'false' }}" data-sidebar-menu-key="support" data-sidebar-menu-target="support-menu-links-section" data-sidebar-menu-caret="support-menu-caret">
         <span class="nav-text">{{ app_settings.support_menu_name or 'Support' }}</span>
-        <i id="support-menu-caret" class="bi bi-caret-down-fill ms-2 transition" style="font-size: 0.9em; transition: transform 0.2s;"></i>
+        <i id="support-menu-caret" class="bi bi-caret-down-fill ms-2 transition" style="font-size: 0.9em; transition: transform 0.2s;{% if not support_menu_expanded %} transform: rotate(-90deg);{% endif %}"></i>
       </div>
-      <div id="support-menu-links-section">
+      <div id="support-menu-links-section"{% if not support_menu_expanded %} class="d-none"{% endif %} aria-hidden="{{ 'false' if support_menu_expanded else 'true' }}">
         <ul class="nav flex-column mb-2">
           {% if show_support_latest_features %}
           <li class="nav-item">
-            <a class="nav-link d-flex align-items-center" href="{{ url_for('support_latest_features') }}">
+            <a class="nav-link d-flex align-items-center" href="{{ url_for('frontend_support.support_latest_features') }}">
               <i class="bi bi-lightning-charge me-2" style="font-size: 0.8em;"></i>
               <span class="nav-text">Latest Features</span>
               <span class="badge bg-warning text-dark text-uppercase ms-2">New</span>
@@ -107,7 +136,7 @@
           {% endif %}
           {% if show_support_send_feedback %}
           <li class="nav-item">
-            <a class="nav-link d-flex align-items-center" href="{{ url_for('support_send_feedback') }}">
+            <a class="nav-link d-flex align-items-center" href="{{ url_for('frontend_support.support_send_feedback') }}">
               <i class="bi bi-envelope-paper me-2" style="font-size: 0.8em;"></i>
               <span class="nav-text">Send Feedback</span>
             </a>
@@ -120,18 +149,19 @@
     {% endif %}
 
     <!-- Conversations Section - Only show on chats page -->
-    {% if request.endpoint == 'chats' %}
+    {% if request.endpoint == 'frontend_chats.chats' %}
+    {% set conversations_menu_expanded = sidebar_menu_state.get('conversations', true) %}
     <div id="conversations-section" class="flex-grow-1 overflow-auto">
-      <div id="conversations-toggle" class="mt-2 mb-1 ps-3 pe-2 text-muted small d-flex align-items-center justify-content-between" style="font-weight: 500; letter-spacing: 0.02em; cursor: pointer; user-select: none;">
+      <div id="conversations-toggle" class="sidebar-section-toggle mt-2 mb-1 ps-3 pe-2 text-muted small d-flex align-items-center justify-content-between" role="button" tabindex="0" aria-controls="conversations-list-container" aria-expanded="{{ 'true' if conversations_menu_expanded else 'false' }}" data-sidebar-menu-key="conversations" data-sidebar-menu-target="conversations-list-container" data-sidebar-menu-caret="conversations-caret">
         <div class="d-flex align-items-center">
           <span class="nav-text">Conversations</span>
-          <i id="conversations-caret" class="bi bi-caret-down-fill ms-2 transition" style="font-size: 0.9em; transition: transform 0.2s;"></i>
+          <i id="conversations-caret" class="bi bi-caret-down-fill ms-2 transition" style="font-size: 0.9em; transition: transform 0.2s;{% if not conversations_menu_expanded %} transform: rotate(-90deg);{% endif %}"></i>
         </div>
         <div class="d-flex align-items-center">
-          <button id="sidebar-search-btn" class="btn btn-sm btn-link text-muted p-0 me-1" style="padding: 2px 6px; font-size: 0.75rem; border: none; background: none;" title="Search conversations">
+          <button id="sidebar-search-btn" class="btn btn-sm btn-link text-muted p-0 me-1" style="padding: 2px 6px; font-size: 0.75rem; border: none; background: none;" title="Search conversations" data-sidebar-menu-ignore="true">
             <i class="bi bi-search" style="font-size: 0.9em;"></i>
           </button>
-          <button id="sidebar-conversations-settings-btn" class="btn btn-sm btn-link text-muted p-0 me-1" style="padding: 2px 6px; font-size: 0.75rem; border: none; background: none;" title="Show/Hide hidden conversations">
+          <button id="sidebar-conversations-settings-btn" class="btn btn-sm btn-link text-muted p-0 me-1" style="padding: 2px 6px; font-size: 0.75rem; border: none; background: none;" title="Show/Hide hidden conversations" data-sidebar-menu-ignore="true">
             <i class="bi bi-eye" style="font-size: 0.9em;"></i>
           </button>
           <div id="conversations-actions" class="d-flex align-items-center" style="display: none !important;">
@@ -162,11 +192,23 @@
           </button>
         </div>
       </div>
-      <div id="conversations-list-container" class="px-2">
+      <div id="conversations-list-container" class="px-2{% if not conversations_menu_expanded %} d-none{% endif %}" aria-hidden="{{ 'false' if conversations_menu_expanded else 'true' }}">
         <div id="sidebar-conversations-list" class="list-group list-group-flush">
           <div class="text-center p-2 text-muted small">Loading conversations...</div>
         </div>
       </div>
+      {% if sidebar_settings.allow_user_workflows %}
+      <div id="sidebar-workflow-section" class="d-none">
+        <div id="sidebar-workflows-toggle" class="sidebar-section-toggle mt-2 mb-1 ps-3 pe-2 text-muted small d-flex align-items-center" role="button" tabindex="0" aria-controls="sidebar-workflow-list-container" aria-expanded="true">
+          <span class="nav-text">Workflows</span>
+          <i id="sidebar-workflows-caret" class="bi bi-caret-down-fill ms-2 transition" style="font-size: 0.9em; transition: transform 0.2s;"></i>
+        </div>
+        <div id="sidebar-workflow-list-container" class="px-2 sidebar-workflow-list-container">
+          <div id="sidebar-workflow-conversations-list" class="list-group list-group-flush"></div>
+          <button type="button" id="sidebar-workflow-show-more-btn" class="btn btn-sm btn-link text-muted w-100 d-none" aria-expanded="false">Show more</button>
+        </div>
+      </div>
+      {% endif %}
     </div>
     {% endif %}
   </div>
@@ -199,7 +241,7 @@
         </a>
         <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="sidebarUserDropdown">
           <li>
-            <a class="dropdown-item" href="{{ url_for('profile') }}">
+            <a class="dropdown-item" href="{{ url_for('frontend_profile.profile') }}">
               <i class="bi bi-person-circle me-2"></i> {{ session['user'].get('name') }}
             </a>
           </li>
@@ -219,22 +261,22 @@
           <li><hr class="dropdown-divider"></li>
           {% if app_settings.enable_group_workspaces %}
           <li>
-            <a class="dropdown-item" href="{{ url_for('my_groups') }}">My Groups</a>
+            <a class="dropdown-item" href="{{ url_for('frontend_groups.my_groups') }}">My Groups</a>
           </li>
           {% endif %}
           {% if app_settings.enable_public_workspaces %}
           <li>
-            <a class="dropdown-item" href="{{ url_for('my_public_workspaces') }}">My Public Workspaces</a>
+            <a class="dropdown-item" href="{{ url_for('frontend_public_workspaces.my_public_workspaces') }}">My Public Workspaces</a>
           </li>
           {% endif %}
           {% if app_settings.enable_user_feedback %}
           <li>
-            <a class="dropdown-item" href="{{ url_for('my_feedback') }}">My Feedback</a>
+            <a class="dropdown-item" href="{{ url_for('frontend_feedback.my_feedback') }}">My Feedback</a>
           </li>
           {% endif %}
           {% if app_settings.enable_content_safety %}
           <li>
-            <a class="dropdown-item" href="{{ url_for('my_safety_violations') }}">My Safety Violations</a>
+            <a class="dropdown-item" href="{{ url_for('frontend_safety.my_safety_violations') }}">My Safety Violations</a>
           </li>
           {% endif %}
           {% if 'Admin' in session['user']['roles'] %}
@@ -243,62 +285,34 @@
             Admin
           </div>
           <li>
-            <a class="dropdown-item" href="{{ url_for('admin_settings') }}">App Settings</a>
+            <a class="dropdown-item" href="{{ url_for('frontend_admin_settings.admin_settings') }}">App Settings</a>
           </li>
           {% if app_settings.enable_content_safety %}
             {% if (app_settings.require_member_of_safety_violation_admin and session.get('user') and 'SafetyViolationAdmin' in session['user']['roles']) or not app_settings.require_member_of_safety_violation_admin %}
             <li>
-              <a class="dropdown-item" href="{{ url_for('admin_safety_violations') }}">Safety Violations</a>
+              <a class="dropdown-item" href="{{ url_for('frontend_safety.admin_safety_violations') }}">Safety Violations</a>
             </li>
             {% endif %}
           {% endif %}
           {% if app_settings.enable_user_feedback %}
             {% if (app_settings.require_member_of_feedback_admin and session.get('user') and 'FeedbackAdmin' in session['user']['roles']) or not app_settings.require_member_of_feedback_admin %}
             <li>
-              <a class="dropdown-item" href="{{ url_for('admin_feedback_review') }}">Feedback Review</a>
+              <a class="dropdown-item" href="{{ url_for('frontend_feedback.admin_feedback_review') }}">Feedback Review</a>
             </li>
             {% endif %}
           {% endif %}
           {% endif %}
           <li><hr class="dropdown-divider"></li>
           <li>
-            <a class="dropdown-item" href="{{ url_for('logout') }}">
+            <a class="dropdown-item" href="{{ url_for('frontend_authentication.logout') }}">
               <i class="bi bi-box-arrow-right me-2"></i> Logout
             </a>
           </li>
         </ul>
       </div>
     {% else %}
-      <a class="btn btn-outline-primary w-100" href="{{ url_for('login') }}">Login</a>
+      <a class="btn btn-outline-primary w-100" href="{{ url_for('frontend_authentication.login') }}">Login</a>
     {% endif %}
   </div>
-  <script>
-    // Collapsible Conversations Section (for chats page)
-    document.addEventListener('DOMContentLoaded', function() {
-      var supportMenuToggle = document.getElementById('support-menu-toggle');
-      var supportMenuSection = document.getElementById('support-menu-links-section');
-      var supportMenuCaret = document.getElementById('support-menu-caret');
-      var supportMenuCollapsed = false;
-      if (supportMenuToggle && supportMenuSection && supportMenuCaret) {
-        supportMenuToggle.addEventListener('click', function() {
-          supportMenuCollapsed = !supportMenuCollapsed;
-          supportMenuSection.style.display = supportMenuCollapsed ? 'none' : '';
-          supportMenuCaret.style.transform = supportMenuCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)';
-        });
-      }
-
-      var conversationsToggle = document.getElementById('conversations-toggle');
-      var conversationsContainer = document.getElementById('conversations-list-container');
-      var conversationsCaret = document.getElementById('conversations-caret');
-      var conversationsCollapsed = false;
-      if (conversationsToggle && conversationsContainer && conversationsCaret) {
-        conversationsToggle.addEventListener('click', function() {
-          conversationsCollapsed = !conversationsCollapsed;
-          conversationsContainer.style.display = conversationsCollapsed ? 'none' : '';
-          conversationsCaret.style.transform = conversationsCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)';
-        });
-      }
-    });
-
-  </script>
+  <script type="application/json" id="sidebar-menu-state-data">{{ sidebar_menu_state | tojson }}</script>
 </div>

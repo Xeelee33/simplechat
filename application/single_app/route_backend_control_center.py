@@ -14,8 +14,14 @@ from functions_settings import *
 from functions_logging import *
 from functions_activity_logging import *
 from functions_approvals import *
+from functions_approvals import _can_user_approve, _can_user_deny
 from functions_documents import update_document, delete_document, delete_document_chunks
 from functions_group import delete_group
+from functions_safety_remediation import (
+    execute_safety_violation_action,
+    get_safety_log_item,
+    update_safety_log_action_state,
+)
 from utils_cache import invalidate_group_search_cache
 from swagger_wrapper import swagger_route, get_auth_security
 from datetime import datetime, timedelta, timezone
@@ -25,6 +31,189 @@ from functions_debug import debug_print
 
 ACTIVITY_LOGS_DEFAULT_PER_PAGE = 50
 ACTIVITY_LOGS_MAX_PER_PAGE = 200
+CONTROL_CENTER_MANAGEMENT_DEFAULT_PER_PAGE = 25
+CONTROL_CENTER_MANAGEMENT_MAX_PER_PAGE = 250
+
+
+def parse_control_center_management_pagination(request_args):
+    """Parse shared Control Center management pagination query parameters."""
+    try:
+        page = int(request_args.get('page', 1))
+    except (TypeError, ValueError):
+        page = 1
+
+    try:
+        per_page = int(request_args.get('per_page', CONTROL_CENTER_MANAGEMENT_DEFAULT_PER_PAGE))
+    except (TypeError, ValueError):
+        per_page = CONTROL_CENTER_MANAGEMENT_DEFAULT_PER_PAGE
+
+    page = max(page, 1)
+    per_page = min(max(per_page, 1), CONTROL_CENTER_MANAGEMENT_MAX_PER_PAGE)
+
+    return page, per_page
+
+
+def get_control_center_total_pages(total_items, per_page):
+    """Calculate a non-zero total page count for Control Center management tables."""
+    if total_items <= 0:
+        return 1
+
+    return (total_items + per_page - 1) // per_page
+
+
+def clamp_control_center_page(page, total_pages):
+    """Keep requested pages inside available Control Center management ranges."""
+    return min(max(page, 1), max(total_pages, 1))
+
+
+def _normalize_group_token_total(value):
+    """Coerce a Cosmos token aggregate result into a non-negative integer."""
+    try:
+        token_total = int(value or 0)
+    except (TypeError, ValueError):
+        token_total = 0
+
+    return max(token_total, 0)
+
+
+def get_group_token_totals(group_ids):
+    """Return all-time token totals keyed by group id for Control Center group management."""
+    normalized_group_ids = []
+    seen_group_ids = set()
+    for group_id in group_ids or []:
+        normalized_group_id = str(group_id or '').strip()
+        if normalized_group_id and normalized_group_id not in seen_group_ids:
+            normalized_group_ids.append(normalized_group_id)
+            seen_group_ids.add(normalized_group_id)
+
+    token_totals = {group_id: 0 for group_id in normalized_group_ids}
+    if not normalized_group_ids:
+        return token_totals
+
+    aggregate_query = """
+        SELECT c.workspace_context.group_id AS group_id, SUM(c.usage.total_tokens) AS total_tokens
+        FROM c
+        WHERE c.activity_type = 'token_usage'
+        AND IS_DEFINED(c.workspace_context.group_id)
+        AND ARRAY_CONTAINS(@group_ids, c.workspace_context.group_id)
+        AND IS_DEFINED(c.usage.total_tokens)
+        AND IS_NUMBER(c.usage.total_tokens)
+        GROUP BY c.workspace_context.group_id
+    """
+    aggregate_params = [{"name": "@group_ids", "value": normalized_group_ids}]
+
+    try:
+        aggregate_rows = cosmos_activity_logs_container.query_items(
+            query=aggregate_query,
+            parameters=aggregate_params,
+            enable_cross_partition_query=True
+        )
+        for row in aggregate_rows:
+            row_group_id = str(row.get('group_id') or '').strip()
+            if row_group_id in token_totals:
+                token_totals[row_group_id] = _normalize_group_token_total(row.get('total_tokens'))
+
+        return token_totals
+    except Exception as aggregate_error:
+        debug_print(f"[ControlCenter] Error aggregating group token totals: {aggregate_error}")
+
+    fallback_query = """
+        SELECT VALUE SUM(c.usage.total_tokens)
+        FROM c
+        WHERE c.activity_type = 'token_usage'
+        AND c.workspace_context.group_id = @group_id
+        AND IS_DEFINED(c.usage.total_tokens)
+        AND IS_NUMBER(c.usage.total_tokens)
+    """
+    for group_id in normalized_group_ids:
+        try:
+            fallback_rows = list(cosmos_activity_logs_container.query_items(
+                query=fallback_query,
+                parameters=[{"name": "@group_id", "value": group_id}],
+                enable_cross_partition_query=True
+            ))
+            token_totals[group_id] = _normalize_group_token_total(fallback_rows[0] if fallback_rows else 0)
+        except Exception as fallback_error:
+            debug_print(f"[ControlCenter] Error aggregating token total for group {group_id}: {fallback_error}")
+
+    return token_totals
+
+
+def attach_group_token_totals(groups):
+    """Attach all-time token totals to enhanced group payloads."""
+    token_totals = get_group_token_totals([group.get('id') for group in groups or []])
+    for group in groups or []:
+        group_id = str(group.get('id') or '').strip()
+        token_total = token_totals.get(group_id, 0)
+        group['token_total'] = token_total
+        group['total_tokens'] = token_total
+        if not isinstance(group.get('activity'), dict):
+            group['activity'] = {}
+        group['activity']['token_metrics'] = {
+            'total_tokens': token_total
+        }
+
+    return groups
+
+
+def normalize_scope_ids(scope_ids):
+    """Return unique, non-empty scope ids while preserving first-seen order."""
+    normalized_scope_ids = []
+    seen_scope_ids = set()
+    for scope_id in scope_ids or []:
+        normalized_scope_id = str(scope_id or '').strip()
+        if normalized_scope_id and normalized_scope_id not in seen_scope_ids:
+            normalized_scope_ids.append(normalized_scope_id)
+            seen_scope_ids.add(normalized_scope_id)
+
+    return normalized_scope_ids
+
+
+def get_group_name_map(group_ids):
+    """Resolve group names keyed by group id for reporting surfaces."""
+    group_names = {}
+    for group_id in normalize_scope_ids(group_ids):
+        try:
+            group_doc = cosmos_groups_container.read_item(item=group_id, partition_key=group_id)
+            group_names[group_id] = group_doc.get('name') or group_id
+        except Exception as ex:
+            group_names[group_id] = ''
+            log_event(
+                '[ControlCenter][TokenExport] Failed to resolve group name.',
+                extra={
+                    'group_id': group_id,
+                    'error_type': type(ex).__name__
+                },
+                debug_only=True,
+                category='CONTROL_CENTER'
+            )
+
+    return group_names
+
+
+def get_public_workspace_name_map(public_workspace_ids):
+    """Resolve public workspace names keyed by public workspace id for reporting surfaces."""
+    public_workspace_names = {}
+    for public_workspace_id in normalize_scope_ids(public_workspace_ids):
+        try:
+            workspace_doc = cosmos_public_workspaces_container.read_item(
+                item=public_workspace_id,
+                partition_key=public_workspace_id
+            )
+            public_workspace_names[public_workspace_id] = workspace_doc.get('name') or public_workspace_id
+        except Exception as ex:
+            public_workspace_names[public_workspace_id] = ''
+            log_event(
+                '[ControlCenter][TokenExport] Failed to resolve public workspace name.',
+                extra={
+                    'public_workspace_id': public_workspace_id,
+                    'error_type': type(ex).__name__
+                },
+                debug_only=True,
+                category='CONTROL_CENTER'
+            )
+
+    return public_workspace_names
 
 
 def normalize_token_filter_value(value):
@@ -188,14 +377,28 @@ def build_activity_logs_query_context(activity_type_filter='all', search_term=''
                 "(IS_DEFINED(c.workspace_name) AND CONTAINS(LOWER(c.workspace_name), @activity_search_term))",
                 "(IS_DEFINED(c.public_workspace_name) AND CONTAINS(LOWER(c.public_workspace_name), @activity_search_term))",
                 "(IS_DEFINED(c.login_method) AND CONTAINS(LOWER(c.login_method), @activity_search_term))",
+                "(IS_DEFINED(c.conversation_id) AND CONTAINS(LOWER(c.conversation_id), @activity_search_term))",
+                "(IS_DEFINED(c.message_type) AND CONTAINS(LOWER(c.message_type), @activity_search_term))",
+                "(IS_DEFINED(c.chat_context) AND CONTAINS(LOWER(c.chat_context), @activity_search_term))",
                 "(IS_DEFINED(c.token_type) AND CONTAINS(LOWER(c.token_type), @activity_search_term))",
                 "(IS_DEFINED(c.workspace_type) AND CONTAINS(LOWER(c.workspace_type), @activity_search_term))",
+                "(IS_DEFINED(c.action) AND CONTAINS(LOWER(c.action), @activity_search_term))",
+                "(IS_DEFINED(c.group_id) AND CONTAINS(LOWER(c.group_id), @activity_search_term))",
+                "(IS_DEFINED(c.public_workspace_id) AND CONTAINS(LOWER(c.public_workspace_id), @activity_search_term))",
                 "(IS_DEFINED(c.description) AND CONTAINS(LOWER(c.description), @activity_search_term))",
                 "(IS_DEFINED(c.conversation.title) AND CONTAINS(LOWER(c.conversation.title), @activity_search_term))",
                 "(IS_DEFINED(c.document.file_name) AND CONTAINS(LOWER(c.document.file_name), @activity_search_term))",
                 "(IS_DEFINED(c.usage.model) AND CONTAINS(LOWER(c.usage.model), @activity_search_term))",
                 "(IS_DEFINED(c.workspace_context.group_id) AND CONTAINS(LOWER(c.workspace_context.group_id), @activity_search_term))",
-                "(IS_DEFINED(c.workspace_context.public_workspace_id) AND CONTAINS(LOWER(c.workspace_context.public_workspace_id), @activity_search_term))"
+                "(IS_DEFINED(c.workspace_context.public_workspace_id) AND CONTAINS(LOWER(c.workspace_context.public_workspace_id), @activity_search_term))",
+                "(IS_DEFINED(c.additional_context.conversation_source) AND CONTAINS(LOWER(c.additional_context.conversation_source), @activity_search_term))",
+                "(IS_DEFINED(c.additional_context.document_action_type) AND CONTAINS(LOWER(c.additional_context.document_action_type), @activity_search_term))",
+                "(IS_DEFINED(c.additional_context.conversation_kind) AND CONTAINS(LOWER(c.additional_context.conversation_kind), @activity_search_term))",
+                "(IS_DEFINED(c.additional_context.visibility_mode) AND CONTAINS(LOWER(c.additional_context.visibility_mode), @activity_search_term))",
+                "(IS_DEFINED(c.additional_context.job_id) AND CONTAINS(LOWER(c.additional_context.job_id), @activity_search_term))",
+                "(IS_DEFINED(c.additional_context.operation) AND CONTAINS(LOWER(c.additional_context.operation), @activity_search_term))",
+                "(IS_DEFINED(c.additional_context.backup_type) AND CONTAINS(LOWER(c.additional_context.backup_type), @activity_search_term))",
+                "(IS_DEFINED(c.additional_context.status) AND CONTAINS(LOWER(c.additional_context.status), @activity_search_term))"
             ]) + ")"
         )
         parameters.append({"name": "@activity_search_term", "value": normalized_search_term})
@@ -332,6 +535,41 @@ def format_activity_log_details_for_csv(log_record):
         updated_fields = ', '.join((log_record.get('updated_fields') or {}).keys()) or 'N/A'
         document = log_record.get('document', {})
         return f"File: {document.get('file_name', 'Unknown')}, Updated: {updated_fields}"
+
+    if activity_type == 'file_sync':
+        workspace_context = log_record.get('workspace_context', {})
+        additional_context = log_record.get('additional_context', {})
+        counts = additional_context.get('counts', {})
+        count_parts = [
+            f"{key}: {counts.get(key)}"
+            for key in ['scanned', 'queued', 'unchanged', 'skipped', 'deleted', 'failed']
+            if counts.get(key) is not None
+        ]
+        detail_parts = [
+            f"Action: {log_record.get('action', 'sync_event')}",
+            f"Source: {workspace_context.get('source_name') or additional_context.get('source_name') or 'Unknown Source'}",
+            f"Scope: {workspace_context.get('scope_type') or log_record.get('workspace_type') or 'workspace'}"
+        ]
+        if additional_context.get('run_id'):
+            detail_parts.append(f"Run: {additional_context.get('run_id')}")
+        if count_parts:
+            detail_parts.append(', '.join(count_parts))
+        if additional_context.get('error'):
+            detail_parts.append(f"Error: {additional_context.get('error')}")
+        return '; '.join(detail_parts)
+
+    if activity_type == 'data_management':
+        workspace_context = log_record.get('workspace_context', {})
+        additional_context = log_record.get('additional_context', {})
+        detail_parts = [
+            f"Action: {log_record.get('action', 'data_management_event')}",
+            f"Job: {additional_context.get('job_id') or workspace_context.get('job_id') or 'N/A'}",
+            f"Operation: {additional_context.get('operation') or workspace_context.get('operation') or 'N/A'}",
+            f"Status: {additional_context.get('status') or 'N/A'}",
+        ]
+        if additional_context.get('backup_type') or workspace_context.get('backup_type'):
+            detail_parts.append(f"Backup type: {additional_context.get('backup_type') or workspace_context.get('backup_type')}")
+        return '; '.join(detail_parts)
 
     if activity_type == 'token_usage':
         usage = log_record.get('usage', {})
@@ -1158,6 +1396,8 @@ def enhance_group_with_activity(group, force_refresh=False):
             'member_count': len(users_list),  # Owner is already included in users_list
             'document_count': 0,  # Will be updated from database
             'storage_size': 0,  # Will be updated from storage account
+            'token_total': 0,
+            'total_tokens': 0,
             'last_activity': None,  # Will be updated from group_documents
             'recent_activity_count': 0,  # Will be calculated
             'status': group.get('status', 'active'),  # Read from group document, default to 'active'
@@ -1169,6 +1409,9 @@ def enhance_group_with_activity(group, force_refresh=False):
                     'total_documents': 0,
                     'ai_search_size': 0,  # pages × 80KB  
                     'storage_account_size': 0  # Actual file sizes from storage
+                },
+                'token_metrics': {
+                    'total_tokens': 0
                 },
                 'member_metrics': {
                     'total_members': len(users_list),  # Owner is already included in users_list
@@ -2406,6 +2649,10 @@ def get_raw_activity_trends_data(start_date, end_date, charts, token_filters=Non
                     parameters=token_parameters,
                     enable_cross_partition_query=True
                 ))
+                group_name_map = get_group_name_map(token_log.get('group_id') for token_log in token_activities)
+                public_workspace_name_map = get_public_workspace_name_map(
+                    token_log.get('public_workspace_id') for token_log in token_activities
+                )
                 
                 token_records = []
                 for token_log in token_activities:
@@ -2413,6 +2660,8 @@ def get_raw_activity_trends_data(start_date, end_date, charts, token_filters=Non
                     user_info = get_user_info(user_id)
                     timestamp = token_log.get('timestamp') or token_log.get('created_at')
                     token_type = token_log.get('token_type', 'unknown')
+                    group_id = str(token_log.get('group_id') or '').strip()
+                    public_workspace_id = str(token_log.get('public_workspace_id') or '').strip()
                     
                     if timestamp:
                         try:
@@ -2431,8 +2680,10 @@ def get_raw_activity_trends_data(start_date, end_date, charts, token_filters=Non
                                 'user_id': user_id,
                                 'token_type': token_type,
                                 'workspace_type': token_log.get('workspace_type', ''),
-                                'group_id': token_log.get('group_id', ''),
-                                'public_workspace_id': token_log.get('public_workspace_id', ''),
+                                'group_id': group_id,
+                                'group_name': group_name_map.get(group_id, ''),
+                                'public_workspace_id': public_workspace_id,
+                                'public_workspace_name': public_workspace_name_map.get(public_workspace_id, ''),
                                 'model_name': token_log.get('model_name', 'Unknown'),
                                 'prompt_tokens': prompt_tokens,
                                 'completion_tokens': completion_tokens,
@@ -2458,10 +2709,10 @@ def get_raw_activity_trends_data(start_date, end_date, charts, token_filters=Non
         return {}
 
 
-def register_route_backend_control_center(app):
+def register_route_backend_control_center(bp):
     
     # User Management APIs
-    @app.route('/api/admin/control-center/users', methods=['GET'])
+    @bp.route('/api/admin/control-center/users', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -2471,8 +2722,7 @@ def register_route_backend_control_center(app):
         Supports pagination and filtering.
         """
         try:
-            page = int(request.args.get('page', 1))
-            per_page = min(int(request.args.get('per_page', 50)), 100)  # Max 100 per page
+            page, per_page = parse_control_center_management_pagination(request.args)
             search = request.args.get('search', '').strip()
             access_filter = request.args.get('access_filter', 'all')  # all, allow, deny
             force_refresh = request.args.get('force_refresh', 'false').lower() == 'true'
@@ -2529,8 +2779,9 @@ def register_route_backend_control_center(app):
             total_items = total_items_result[0] if total_items_result and isinstance(total_items_result[0], int) else 0
             
             # Calculate pagination
+            total_pages = get_control_center_total_pages(total_items, per_page)
+            page = clamp_control_center_page(page, total_pages)
             offset = (page - 1) * per_page
-            total_pages = (total_items + per_page - 1) // per_page
             
             # Get paginated results
             users_query = f"""
@@ -2569,7 +2820,7 @@ def register_route_backend_control_center(app):
             debug_print(f"Error getting users: {e}")
             return jsonify({'error': 'Failed to retrieve users'}), 500
     
-    @app.route('/api/admin/control-center/users/<user_id>/access', methods=['PATCH'])
+    @bp.route('/api/admin/control-center/users/<user_id>/access', methods=['PATCH'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -2625,7 +2876,7 @@ def register_route_backend_control_center(app):
             debug_print(f"Error updating user access: {e}")
             return jsonify({'error': 'Failed to update user access'}), 500
     
-    @app.route('/api/admin/control-center/users/<user_id>/file-uploads', methods=['PATCH'])
+    @bp.route('/api/admin/control-center/users/<user_id>/file-uploads', methods=['PATCH'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -2681,7 +2932,7 @@ def register_route_backend_control_center(app):
             debug_print(f"Error updating user file uploads: {e}")
             return jsonify({'error': 'Failed to update user file upload permissions'}), 500
     
-    @app.route('/api/admin/control-center/users/<user_id>/delete-documents', methods=['POST'])
+    @bp.route('/api/admin/control-center/users/<user_id>/delete-documents', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -2755,7 +3006,7 @@ def register_route_backend_control_center(app):
             })
             return jsonify({'error': str(e)}), 500
     
-    @app.route('/api/admin/control-center/users/bulk-action', methods=['POST'])
+    @bp.route('/api/admin/control-center/users/bulk-action', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -2841,7 +3092,7 @@ def register_route_backend_control_center(app):
             return jsonify({'error': 'Failed to perform bulk action'}), 500
 
     # Group Management APIs
-    @app.route('/api/admin/control-center/groups', methods=['GET'])
+    @bp.route('/api/admin/control-center/groups', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -2851,8 +3102,7 @@ def register_route_backend_control_center(app):
         Supports pagination and filtering.
         """
         try:
-            page = int(request.args.get('page', 1))
-            per_page = min(int(request.args.get('per_page', 50)), 100)  # Max 100 per page
+            page, per_page = parse_control_center_management_pagination(request.args)
             search = request.args.get('search', '').strip()
             status_filter = request.args.get('status_filter', 'all')  # all, active, locked, etc.
             force_refresh = request.args.get('force_refresh', 'false').lower() == 'true'
@@ -2866,9 +3116,13 @@ def register_route_backend_control_center(app):
                 query_conditions.append("(CONTAINS(LOWER(c.name), @search) OR CONTAINS(LOWER(c.description), @search))")
                 parameters.append({"name": "@search", "value": search.lower()})
             
-            # Note: status filtering would need to be implemented based on business logic
-            # For now, we'll get all groups and filter client-side if needed
-            
+            if status_filter != 'all':
+                if status_filter == 'active':
+                    query_conditions.append("(NOT IS_DEFINED(c.status) OR IS_NULL(c.status) OR c.status = @status_filter)")
+                else:
+                    query_conditions.append("c.status = @status_filter")
+                parameters.append({"name": "@status_filter", "value": status_filter})
+
             where_clause = " AND ".join(query_conditions) if query_conditions else "1=1"
             
             if export_all:
@@ -2891,6 +3145,7 @@ def register_route_backend_control_center(app):
                 for group in groups:
                     enhanced_group = enhance_group_with_activity(group, force_refresh=force_refresh)
                     enhanced_groups.append(enhanced_group)
+                attach_group_token_totals(enhanced_groups)
                 
                 return jsonify({
                     'success': True,
@@ -2908,8 +3163,9 @@ def register_route_backend_control_center(app):
             total_items = total_items_result[0] if total_items_result and isinstance(total_items_result[0], int) else 0
             
             # Calculate pagination
+            total_pages = get_control_center_total_pages(total_items, per_page)
+            page = clamp_control_center_page(page, total_pages)
             offset = (page - 1) * per_page
-            total_pages = (total_items + per_page - 1) // per_page
             
             # Get paginated results
             groups_query = f"""
@@ -2931,6 +3187,7 @@ def register_route_backend_control_center(app):
             for group in groups:
                 enhanced_group = enhance_group_with_activity(group, force_refresh=force_refresh)
                 enhanced_groups.append(enhanced_group)
+            attach_group_token_totals(enhanced_groups)
             
             return jsonify({
                 'groups': enhanced_groups,
@@ -2948,7 +3205,7 @@ def register_route_backend_control_center(app):
             debug_print(f"Error getting groups: {e}")
             return jsonify({'error': 'Failed to retrieve groups'}), 500
 
-    @app.route('/api/admin/control-center/groups/<group_id>/status', methods=['PUT'])
+    @bp.route('/api/admin/control-center/groups/<group_id>/status', methods=['PUT'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -3047,7 +3304,7 @@ def register_route_backend_control_center(app):
             debug_print(f"Error updating group status: {e}")
             return jsonify({'error': 'Failed to update group status'}), 500
 
-    @app.route('/api/admin/control-center/groups/<group_id>', methods=['GET'])
+    @bp.route('/api/admin/control-center/groups/<group_id>', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -3064,6 +3321,7 @@ def register_route_backend_control_center(app):
             
             # Enhance with activity data
             enhanced_group = enhance_group_with_activity(group)
+            attach_group_token_totals([enhanced_group])
             
             return jsonify(enhanced_group), 200
             
@@ -3071,7 +3329,7 @@ def register_route_backend_control_center(app):
             debug_print(f"Error getting group details: {e}")
             return jsonify({'error': 'Failed to retrieve group details'}), 500
 
-    @app.route('/api/admin/control-center/groups/<group_id>', methods=['DELETE'])
+    @bp.route('/api/admin/control-center/groups/<group_id>', methods=['DELETE'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -3136,7 +3394,7 @@ def register_route_backend_control_center(app):
             debug_print(f"Error creating group deletion request: {e}")
             return jsonify({'error': str(e)}), 500
 
-    @app.route('/api/admin/control-center/groups/<group_id>/delete-documents', methods=['POST'])
+    @bp.route('/api/admin/control-center/groups/<group_id>/delete-documents', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -3199,7 +3457,7 @@ def register_route_backend_control_center(app):
             debug_print(f"Error creating document deletion request: {e}")
             return jsonify({'error': str(e)}), 500
 
-    @app.route('/api/admin/control-center/groups/<group_id>/members', methods=['GET'])
+    @bp.route('/api/admin/control-center/groups/<group_id>/members', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -3233,7 +3491,7 @@ def register_route_backend_control_center(app):
             debug_print(f"Error getting group members: {e}")
             return jsonify({'error': 'Failed to retrieve group members'}), 500
 
-    @app.route('/api/admin/control-center/groups/<group_id>/take-ownership', methods=['POST'])
+    @bp.route('/api/admin/control-center/groups/<group_id>/take-ownership', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -3301,7 +3559,7 @@ def register_route_backend_control_center(app):
             debug_print(f"Error creating take ownership request: {e}")
             return jsonify({'error': str(e)}), 500
 
-    @app.route('/api/admin/control-center/groups/<group_id>/transfer-ownership', methods=['POST'])
+    @bp.route('/api/admin/control-center/groups/<group_id>/transfer-ownership', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -3384,7 +3642,7 @@ def register_route_backend_control_center(app):
             debug_print(f"Error creating transfer ownership request: {e}")
             return jsonify({'error': str(e)}), 500
 
-    @app.route('/api/admin/control-center/groups/<group_id>/add-member', methods=['POST'])
+    @bp.route('/api/admin/control-center/groups/<group_id>/add-member', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -3491,7 +3749,7 @@ def register_route_backend_control_center(app):
             debug_print(f"Error adding group member: {e}")
             return jsonify({'error': 'Failed to add member'}), 500
 
-    @app.route('/api/admin/control-center/groups/<group_id>/activity', methods=['GET'])
+    @bp.route('/api/admin/control-center/groups/<group_id>/activity', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -3716,7 +3974,7 @@ def register_route_backend_control_center(app):
             return jsonify({'error': f'Failed to fetch group activity: {str(e)}'}), 500
 
     # Public Workspaces API
-    @app.route('/api/admin/control-center/public-workspaces', methods=['GET'])
+    @bp.route('/api/admin/control-center/public-workspaces', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -3727,15 +3985,11 @@ def register_route_backend_control_center(app):
         """
         try:
             # Parse request parameters
-            page = int(request.args.get('page', 1))
-            per_page = min(int(request.args.get('per_page', 50)), 100)  # Max 100 per page
+            page, per_page = parse_control_center_management_pagination(request.args)
             search_term = request.args.get('search', '').strip()
             status_filter = request.args.get('status_filter', 'all')
             force_refresh = request.args.get('force_refresh', 'false').lower() == 'true'
             export_all = request.args.get('all', 'false').lower() == 'true'  # For CSV export
-            
-            # Calculate offset (only needed if not exporting all)
-            offset = (page - 1) * per_page if not export_all else 0
             
             # Base query for public workspaces
             if search_term:
@@ -3761,14 +4015,17 @@ def register_route_backend_control_center(app):
             
             # Apply status filter if specified
             if status_filter != 'all':
-                # For now, we'll treat all workspaces as 'active'
-                # This can be enhanced later with actual status logic
-                if status_filter != 'active':
-                    all_workspaces = []
+                all_workspaces = [
+                    workspace
+                    for workspace in all_workspaces
+                    if (workspace.get('status') or 'active') == status_filter
+                ]
             
             # Calculate pagination
             total_count = len(all_workspaces)
-            total_pages = math.ceil(total_count / per_page) if per_page > 0 else 0
+            total_pages = get_control_center_total_pages(total_count, per_page)
+            page = clamp_control_center_page(page, total_pages)
+            offset = (page - 1) * per_page if not export_all else 0
             
             # Get the workspaces for current page or all for export
             if export_all:
@@ -3806,6 +4063,7 @@ def register_route_backend_control_center(app):
                         'page': page,
                         'per_page': per_page,
                         'total_count': total_count,
+                        'total_items': total_count,
                         'total_pages': total_pages,
                         'has_next': page < total_pages,
                         'has_prev': page > 1
@@ -3821,7 +4079,7 @@ def register_route_backend_control_center(app):
             debug_print(f"Error getting public workspaces for control center: {e}")
             return jsonify({'error': 'Failed to retrieve public workspaces'}), 500
 
-    @app.route('/api/admin/control-center/public-workspaces/<workspace_id>/status', methods=['PUT'])
+    @bp.route('/api/admin/control-center/public-workspaces/<workspace_id>/status', methods=['PUT'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -3920,7 +4178,7 @@ def register_route_backend_control_center(app):
             debug_print(f"Error updating public workspace status: {e}")
             return jsonify({'error': 'Failed to update public workspace status'}), 500
 
-    @app.route('/api/admin/control-center/public-workspaces/bulk-action', methods=['POST'])
+    @bp.route('/api/admin/control-center/public-workspaces/bulk-action', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -4082,7 +4340,7 @@ def register_route_backend_control_center(app):
             debug_print(f"Error performing bulk public workspace action: {e}")
             return jsonify({'error': 'Failed to perform bulk action'}), 500
 
-    @app.route('/api/admin/control-center/public-workspaces/<workspace_id>', methods=['GET'])
+    @bp.route('/api/admin/control-center/public-workspaces/<workspace_id>', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -4107,7 +4365,7 @@ def register_route_backend_control_center(app):
             return jsonify({'error': 'Failed to retrieve workspace details'}), 500
 
 
-    @app.route('/api/admin/control-center/public-workspaces/<workspace_id>/members', methods=['GET'])
+    @bp.route('/api/admin/control-center/public-workspaces/<workspace_id>/members', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -4201,7 +4459,7 @@ def register_route_backend_control_center(app):
             return jsonify({'error': 'Failed to retrieve workspace members'}), 500
 
 
-    @app.route('/api/admin/control-center/public-workspaces/<workspace_id>/add-member', methods=['POST'])
+    @bp.route('/api/admin/control-center/public-workspaces/<workspace_id>/add-member', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -4314,7 +4572,7 @@ def register_route_backend_control_center(app):
             return jsonify({'error': 'Failed to add workspace member'}), 500
 
 
-    @app.route('/api/admin/control-center/public-workspaces/<workspace_id>/add-member-single', methods=['POST'])
+    @bp.route('/api/admin/control-center/public-workspaces/<workspace_id>/add-member-single', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -4419,7 +4677,7 @@ def register_route_backend_control_center(app):
             return jsonify({'error': 'Failed to add workspace member'}), 500
 
 
-    @app.route('/api/admin/control-center/public-workspaces/<workspace_id>/activity', methods=['GET'])
+    @bp.route('/api/admin/control-center/public-workspaces/<workspace_id>/activity', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -4610,7 +4868,7 @@ def register_route_backend_control_center(app):
             return jsonify({'error': 'Failed to retrieve workspace activity'}), 500
 
 
-    @app.route('/api/admin/control-center/public-workspaces/<workspace_id>/take-ownership', methods=['POST'])
+    @bp.route('/api/admin/control-center/public-workspaces/<workspace_id>/take-ownership', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -4691,7 +4949,7 @@ def register_route_backend_control_center(app):
             traceback.print_exc()
             return jsonify({'error': str(e)}), 500
 
-    @app.route('/api/admin/control-center/public-workspaces/<workspace_id>/ownership', methods=['PUT'])
+    @bp.route('/api/admin/control-center/public-workspaces/<workspace_id>/ownership', methods=['PUT'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -4815,7 +5073,7 @@ def register_route_backend_control_center(app):
             return jsonify({'error': 'Failed to create ownership transfer request'}), 500
 
 
-    @app.route('/api/admin/control-center/public-workspaces/<workspace_id>/documents', methods=['DELETE'])
+    @bp.route('/api/admin/control-center/public-workspaces/<workspace_id>/documents', methods=['DELETE'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -4880,7 +5138,7 @@ def register_route_backend_control_center(app):
             return jsonify({'error': str(e)}), 500
 
 
-    @app.route('/api/admin/control-center/public-workspaces/<workspace_id>', methods=['DELETE'])
+    @bp.route('/api/admin/control-center/public-workspaces/<workspace_id>', methods=['DELETE'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -4948,7 +5206,7 @@ def register_route_backend_control_center(app):
             return jsonify({'error': str(e)}), 500
 
     # Activity Trends API
-    @app.route('/api/admin/control-center/activity-trends', methods=['GET'])
+    @bp.route('/api/admin/control-center/activity-trends', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('dashboard')
@@ -5001,7 +5259,7 @@ def register_route_backend_control_center(app):
             return jsonify({'error': 'Failed to retrieve activity trends'}), 500
 
 
-    @app.route('/api/admin/control-center/token-filters', methods=['GET'])
+    @bp.route('/api/admin/control-center/token-filters', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('dashboard')
@@ -5099,7 +5357,7 @@ def register_route_backend_control_center(app):
 
 
 
-    @app.route('/api/admin/control-center/activity-trends/export', methods=['POST'])
+    @bp.route('/api/admin/control-center/activity-trends/export', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('dashboard')
@@ -5238,8 +5496,8 @@ def register_route_backend_control_center(app):
                         debug_print(f"🔍 [CSV DEBUG] Writing token usage headers for {chart_type}")
                         writer.writerow([
                             'Display Name', 'Email', 'User ID', 'Workspace Type', 'Group ID',
-                            'Public Workspace ID', 'Token Type', 'Model Name', 'Prompt Tokens',
-                            'Completion Tokens', 'Total Tokens', 'Timestamp'
+                            'Group Name', 'Public Workspace ID', 'Public Workspace Name', 'Token Type',
+                            'Model Name', 'Prompt Tokens', 'Completion Tokens', 'Total Tokens', 'Timestamp'
                         ])
                         record_count = 0
                         for record in raw_data[chart_type]:
@@ -5253,7 +5511,9 @@ def register_route_backend_control_center(app):
                                 record.get('user_id', ''),
                                 record.get('workspace_type', ''),
                                 record.get('group_id', ''),
+                                record.get('group_name', ''),
                                 record.get('public_workspace_id', ''),
+                                record.get('public_workspace_name', ''),
                                 record.get('token_type', ''),
                                 record.get('model_name', ''),
                                 record.get('prompt_tokens', ''),
@@ -5294,7 +5554,7 @@ def register_route_backend_control_center(app):
             debug_print(f"Error exporting activity trends: {e}")
             return jsonify({'error': 'Failed to export data'}), 500
 
-    @app.route('/api/admin/control-center/activity-trends/chat', methods=['POST'])
+    @bp.route('/api/admin/control-center/activity-trends/chat', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('dashboard')
@@ -5452,7 +5712,7 @@ def register_route_backend_control_center(app):
             return jsonify({'error': 'Failed to create chat conversation'}), 500
     
     # Data Refresh API
-    @app.route('/api/admin/control-center/refresh', methods=['POST'])
+    @bp.route('/api/admin/control-center/refresh', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -5597,7 +5857,7 @@ def register_route_backend_control_center(app):
             return jsonify({'error': 'Failed to refresh data'}), 500
     
     # Get refresh status API
-    @app.route('/api/admin/control-center/refresh-status', methods=['GET'])
+    @bp.route('/api/admin/control-center/refresh-status', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')  
@@ -5621,7 +5881,7 @@ def register_route_backend_control_center(app):
             return jsonify({'error': 'Failed to get refresh status'}), 500
     
     # Activity Log Migration APIs
-    @app.route('/api/admin/control-center/migrate/status', methods=['GET'])
+    @bp.route('/api/admin/control-center/migrate/status', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -5721,7 +5981,7 @@ def register_route_backend_control_center(app):
             debug_print(f"Error getting migration status: {e}")
             return jsonify({'error': 'Failed to get migration status'}), 500
     
-    @app.route('/api/admin/control-center/migrate/all', methods=['POST'])
+    @bp.route('/api/admin/control-center/migrate/all', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -6031,7 +6291,7 @@ def register_route_backend_control_center(app):
             traceback.print_exc()
             return jsonify({'error': f'Migration failed: {str(e)}'}), 500
 
-    @app.route('/api/admin/control-center/activity-logs', methods=['GET'])
+    @bp.route('/api/admin/control-center/activity-logs', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -6156,7 +6416,7 @@ def register_route_backend_control_center(app):
             )
             return jsonify({'error': 'Failed to fetch activity logs'}), 500
 
-    @app.route('/api/admin/control-center/activity-logs/export', methods=['GET'])
+    @bp.route('/api/admin/control-center/activity-logs/export', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -6252,7 +6512,7 @@ def register_route_backend_control_center(app):
     # APPROVAL WORKFLOW ENDPOINTS
     # ============================================================================
 
-    @app.route('/api/admin/control-center/approvals', methods=['GET'])
+    @bp.route('/api/admin/control-center/approvals', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -6301,8 +6561,8 @@ def register_route_backend_control_center(app):
             approvals_with_permission = []
             for approval in result.get('approvals', []):
                 approval_copy = dict(approval)
-                # User can approve if they didn't create the request OR if they're the only admin
-                approval_copy['can_approve'] = (approval.get('requester_id') != user_id)
+                approval_copy['can_approve'] = _can_user_approve(approval, user_id, user_roles)
+                approval_copy['can_deny'] = _can_user_deny(approval, user_id, user_roles)
                 approvals_with_permission.append(approval_copy)
             
             # Rename fields to match frontend expectations
@@ -6321,7 +6581,12 @@ def register_route_backend_control_center(app):
             debug_print(traceback.format_exc())
             return jsonify({'error': 'Failed to fetch approvals', 'details': str(e)}), 500
 
-    def _get_authorized_route_approval(approval_id, group_id, require_approval_rights=False):
+    def _get_authorized_route_approval(
+        approval_id,
+        group_id,
+        require_approval_rights=False,
+        require_denial_rights=False,
+    ):
         """Resolve the current user and return an authorized approval plus user context."""
         user = session.get('user', {})
         user_id = user.get('oid') or user.get('sub')
@@ -6334,10 +6599,11 @@ def register_route_backend_control_center(app):
             user_id,
             user_roles,
             require_approval_rights=require_approval_rights,
+            require_denial_rights=require_denial_rights,
         )
         return approval, user_id, user_roles, user_email, user_name
 
-    @app.route('/api/admin/control-center/approvals/<approval_id>', methods=['GET'])
+    @bp.route('/api/admin/control-center/approvals/<approval_id>', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -6360,6 +6626,7 @@ def register_route_backend_control_center(app):
             
             # Add can_approve field
             approval['can_approve'] = _can_user_approve(approval, user_id, user_roles)
+            approval['can_deny'] = _can_user_deny(approval, user_id, user_roles)
             
             return jsonify(approval), 200
         except LookupError:
@@ -6373,7 +6640,7 @@ def register_route_backend_control_center(app):
             debug_print(traceback.format_exc())
             return jsonify({'error': 'Failed to fetch approval', 'details': str(e)}), 500
 
-    @app.route('/api/admin/control-center/approvals/<approval_id>/approve', methods=['POST'])
+    @bp.route('/api/admin/control-center/approvals/<approval_id>/approve', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -6428,7 +6695,7 @@ def register_route_backend_control_center(app):
             debug_print(f"Error approving request: {e}")
             return jsonify({'error': str(e)}), 500
 
-    @app.route('/api/admin/control-center/approvals/<approval_id>/deny', methods=['POST'])
+    @bp.route('/api/admin/control-center/approvals/<approval_id>/deny', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @control_center_required('admin')
@@ -6454,7 +6721,7 @@ def register_route_backend_control_center(app):
             approval, user_id, _user_roles, user_email, user_name = _get_authorized_route_approval(
                 approval_id,
                 group_id,
-                require_approval_rights=True,
+                require_denial_rights=True,
             )
             
             # Deny the request
@@ -6484,7 +6751,7 @@ def register_route_backend_control_center(app):
             return jsonify({'error': str(e)}), 500
     
     # New standalone approvals API endpoints (accessible to all users with permissions)
-    @app.route('/api/approvals', methods=['GET'])
+    @bp.route('/api/approvals', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     def api_get_approvals():
@@ -6537,6 +6804,7 @@ def register_route_backend_control_center(app):
             for approval in result.get('approvals', []):
                 approval_copy = dict(approval)
                 approval_copy['can_approve'] = _can_user_approve(approval, user_id, user_roles)
+                approval_copy['can_deny'] = _can_user_deny(approval, user_id, user_roles)
                 approvals_with_permission.append(approval_copy)
             
             return jsonify({
@@ -6554,7 +6822,7 @@ def register_route_backend_control_center(app):
             debug_print(traceback.format_exc())
             return jsonify({'error': 'Failed to fetch approvals', 'details': str(e)}), 500
 
-    @app.route('/api/approvals/<approval_id>', methods=['GET'])
+    @bp.route('/api/approvals/<approval_id>', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     def api_get_approval_by_id(approval_id):
@@ -6576,6 +6844,7 @@ def register_route_backend_control_center(app):
             
             # Add can_approve field
             approval['can_approve'] = _can_user_approve(approval, user_id, user_roles)
+            approval['can_deny'] = _can_user_deny(approval, user_id, user_roles)
             
             return jsonify(approval), 200
         except LookupError:
@@ -6589,7 +6858,7 @@ def register_route_backend_control_center(app):
             debug_print(traceback.format_exc())
             return jsonify({'error': 'Failed to fetch approval', 'details': str(e)}), 500
 
-    @app.route('/api/approvals/<approval_id>/approve', methods=['POST'])
+    @bp.route('/api/approvals/<approval_id>/approve', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     def api_approve_request(approval_id):
@@ -6643,7 +6912,7 @@ def register_route_backend_control_center(app):
             debug_print(f"Error approving request: {e}")
             return jsonify({'error': str(e)}), 500
 
-    @app.route('/api/approvals/<approval_id>/deny', methods=['POST'])
+    @bp.route('/api/approvals/<approval_id>/deny', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     def api_deny_request(approval_id):
@@ -6668,7 +6937,7 @@ def register_route_backend_control_center(app):
             approval, user_id, _user_roles, user_email, user_name = _get_authorized_route_approval(
                 approval_id,
                 group_id,
-                require_approval_rights=True,
+                require_denial_rights=True,
             )
             
             # Deny the request
@@ -6747,6 +7016,9 @@ def register_route_backend_control_center(app):
             elif request_type == TYPE_DELETE_USER_DOCUMENTS:
                 # Execute delete user documents
                 result = _execute_delete_user_documents(approval, executor_id, executor_email, executor_name)
+
+            elif request_type in {TYPE_WARN_USER, TYPE_SUSPEND_USER, TYPE_BLOCK_USER}:
+                result = _execute_safety_violation_request(approval, executor_id, executor_email, executor_name)
             
             else:
                 result = {'success': False, 'message': f'Unknown request type: {request_type}'}
@@ -6762,6 +7034,20 @@ def register_route_backend_control_center(app):
             return result
             
         except Exception as e:
+            if approval.get('request_type') in {TYPE_WARN_USER, TYPE_SUSPEND_USER, TYPE_BLOCK_USER}:
+                safety_log_id = approval.get('metadata', {}).get('safety_log_id')
+                if safety_log_id:
+                    try:
+                        update_safety_log_action_state(safety_log_id, {
+                            'action_request_status': 'failed',
+                            'action_request_id': approval.get('id'),
+                            'action_request_type': approval.get('request_type'),
+                            'action_approved_at': approval.get('approved_at'),
+                            'action_execution_error': str(e),
+                        })
+                    except Exception as update_error:
+                        debug_print(f"Error updating failed safety remediation state: {update_error}")
+
             # Mark as failed
             mark_approval_executed(
                 approval_id=approval['id'],
@@ -6770,6 +7056,43 @@ def register_route_backend_control_center(app):
                 result_message=f"Execution error: {str(e)}"
             )
             raise
+
+    def _execute_safety_violation_request(approval, executor_id, executor_email, executor_name):
+        """Execute an approved safety violation warning or user access restriction."""
+        metadata = approval.get('metadata', {}) or {}
+        safety_log_id = metadata.get('safety_log_id')
+        if not safety_log_id:
+            return {'success': False, 'message': 'Approval metadata is missing the safety log reference.'}
+
+        safety_log = get_safety_log_item(safety_log_id)
+        action = metadata.get('violation_action')
+        if not action:
+            return {'success': False, 'message': 'Approval metadata is missing the violation action.'}
+
+        result = execute_safety_violation_action(
+            action=action,
+            safety_log=safety_log,
+            notification_title=metadata.get('notification_title') or '',
+            notification_message=metadata.get('notification_message') or '',
+            datetime_to_allow=metadata.get('datetime_to_allow'),
+            actor={
+                'id': executor_id,
+                'email': executor_email,
+                'name': executor_name,
+            },
+        )
+
+        update_safety_log_action_state(safety_log_id, {
+            'action_request_status': 'executed',
+            'action_request_id': approval.get('id'),
+            'action_request_type': approval.get('request_type'),
+            'action_requested_at': approval.get('created_at'),
+            'action_approved_at': approval.get('approved_at'),
+            'action_executed_at': datetime.utcnow().isoformat(),
+            'action_execution_error': None,
+        })
+
+        return result
 
     def _execute_take_ownership(approval, executor_id, executor_email, executor_name):
         """Execute admin take ownership action."""

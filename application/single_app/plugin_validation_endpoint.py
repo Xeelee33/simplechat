@@ -3,70 +3,99 @@
 Additional validation endpoints for plugin health checking and manifest validation.
 """
 
-from flask import Blueprint, jsonify, request, current_app
-from semantic_kernel_plugins.plugin_health_checker import PluginHealthChecker, PluginErrorRecovery
-from semantic_kernel_plugins.plugin_loader import discover_plugins
-from functions_appinsights import log_event
-from functions_authentication import login_required, admin_required
-from swagger_wrapper import swagger_route, get_auth_security
 import logging
+
+from flask import Blueprint, current_app, jsonify, request
+
+from functions_appinsights import log_event
+from functions_authentication import admin_required, admin_required_blueprint, login_required, user_required, user_required_blueprint
+from json_schema_validation import apply_plugin_validation_defaults
+from semantic_kernel_plugins.plugin_health_checker import PluginErrorRecovery, PluginHealthChecker
+from semantic_kernel_plugins.plugin_loader import discover_plugins
+from swagger_wrapper import get_auth_security, swagger_route
 
 
 plugin_validation_bp = Blueprint('plugin_validation', __name__)
+plugin_validation_admin_bp = Blueprint('plugin_validation_admin', __name__)
+plugin_validation_bp.before_request(user_required_blueprint())
+plugin_validation_admin_bp.before_request(admin_required_blueprint())
 
 
-@plugin_validation_bp.route('/api/admin/plugins/validate', methods=['POST'])
+def _validate_plugin_manifest_request():
+    manifest = apply_plugin_validation_defaults(request.get_json(silent=True) or {})
+    if not manifest:
+        return jsonify({'error': 'No manifest provided'}), 400
+
+    plugin_type = manifest.get('type', '')
+    plugin_name = manifest.get('name', 'unnamed')
+
+    # Perform health checker validation
+    is_valid, validation_errors = PluginHealthChecker.validate_plugin_manifest(manifest, plugin_type)
+
+    response = {
+        'valid': is_valid,
+        'plugin_name': plugin_name,
+        'plugin_type': plugin_type,
+        'errors': validation_errors,
+        'warnings': []
+    }
+
+    # Additional checks for completeness
+    if not manifest.get('description'):
+        response['warnings'].append('Plugin description is empty')
+
+    if plugin_type in ['azure_function', 'blob_storage', 'queue_storage'] and not manifest.get('endpoint'):
+        response['warnings'].append('Endpoint field is recommended for this plugin type')
+
+    log_event(
+        f"[Plugin Validation] Validated manifest for {plugin_name}",
+        extra={'plugin_name': plugin_name, 'valid': is_valid, 'errors': validation_errors},
+    )
+
+    return jsonify(response)
+
+
+@plugin_validation_bp.route('/api/plugins/validate', methods=['POST'])
 @swagger_route(
     security=get_auth_security()
 )
 @login_required
-@admin_required
+@user_required
 def validate_plugin_manifest():
     """
     Validate a plugin manifest without saving it.
     Useful for frontend validation before submission.
     """
     try:
-        manifest = request.json
-        if not manifest:
-            return jsonify({'error': 'No manifest provided'}), 400
-        
-        plugin_type = manifest.get('type', '')
-        plugin_name = manifest.get('name', 'unnamed')
-        
-        # Perform health checker validation
-        is_valid, validation_errors = PluginHealthChecker.validate_plugin_manifest(manifest, plugin_type)
-        
-        response = {
-            'valid': is_valid,
-            'plugin_name': plugin_name,
-            'plugin_type': plugin_type,
-            'errors': validation_errors,
-            'warnings': []
-        }
-        
-        # Additional checks for completeness
-        if not manifest.get('description'):
-            response['warnings'].append('Plugin description is empty')
-        
-        if plugin_type in ['azure_function', 'blob_storage', 'queue_storage']:
-            if not manifest.get('endpoint'):
-                response['warnings'].append('Endpoint field is recommended for this plugin type')
-        
-        log_event(f"[Plugin Validation] Validated manifest for {plugin_name}", 
-                 extra={'plugin_name': plugin_name, 'valid': is_valid, 'errors': validation_errors})
-        
-        return jsonify(response)
-    
+        return _validate_plugin_manifest_request()
     except Exception as e:
         log_event(f"[Plugin Validation] Error validating manifest: {str(e)}", level=logging.ERROR)
         return jsonify({'error': f'Validation failed: {str(e)}'}), 500
 
 
-@plugin_validation_bp.route('/api/admin/plugins/test-instantiation', methods=['POST'])
+@plugin_validation_admin_bp.route('/api/admin/plugins/validate', methods=['POST'])
 @swagger_route(
     security=get_auth_security()
 )
+@login_required
+@admin_required
+def validate_plugin_manifest_admin():
+    """
+    Backward-compatible admin route for plugin manifest validation.
+    """
+    try:
+        return _validate_plugin_manifest_request()
+    except Exception as e:
+        log_event(f"[Plugin Validation] Error validating manifest: {str(e)}", level=logging.ERROR)
+        return jsonify({'error': f'Validation failed: {str(e)}'}), 500
+
+
+@plugin_validation_admin_bp.route('/api/admin/plugins/test-instantiation', methods=['POST'])
+@swagger_route(
+    security=get_auth_security()
+)
+@login_required
+@admin_required
 def test_plugin_instantiation():
     """
     Test if a plugin can be instantiated successfully.
@@ -134,10 +163,12 @@ def test_plugin_instantiation():
         return jsonify({'error': f'Test failed: {str(e)}'}), 500
 
 
-@plugin_validation_bp.route('/api/admin/plugins/health-check/<plugin_name>', methods=['GET'])
+@plugin_validation_admin_bp.route('/api/admin/plugins/health-check/<plugin_name>', methods=['GET'])
 @swagger_route(
     security=get_auth_security()
 )
+@login_required
+@admin_required
 def check_plugin_health(plugin_name):
     """
     Perform a health check on an existing plugin.
@@ -210,10 +241,12 @@ def check_plugin_health(plugin_name):
         }), 500
 
 
-@plugin_validation_bp.route('/api/admin/plugins/repair/<plugin_name>', methods=['POST'])
+@plugin_validation_admin_bp.route('/api/admin/plugins/repair/<plugin_name>', methods=['POST'])
 @swagger_route(
     security=get_auth_security()
 )
+@login_required
+@admin_required
 def repair_plugin(plugin_name):
     """
     Attempt to repair a plugin that has issues.

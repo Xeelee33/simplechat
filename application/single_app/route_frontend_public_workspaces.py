@@ -4,54 +4,42 @@ from config import *
 from functions_authentication import *
 from functions_public_workspaces import update_active_public_workspace_for_user
 from functions_settings import *
+from functions_file_sync import FILE_SYNC_MANAGER_ROLES, assert_public_workspace_role, is_file_sync_enabled_for_public_workspace
 from swagger_wrapper import swagger_route, get_auth_security
 
-def register_route_frontend_public_workspaces(app):
-    @app.route("/my_public_workspaces", methods=["GET"])
+def register_route_frontend_public_workspaces(bp):
+    @bp.route("/my_public_workspaces", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
     @enabled_required("enable_public_workspaces")
     def my_public_workspaces():
-        user = session.get('user', {})
-        user_id = get_current_user_id()
-        settings = get_settings()
-        require_member_of_create_public_workspace = settings.get("require_member_of_create_public_workspace", False)
-        
-        # Check if user can create public workspaces
-        can_create_public_workspaces = True
-        if require_member_of_create_public_workspace:
-            can_create_public_workspaces = 'roles' in user and 'CreatePublicWorkspaces' in user['roles']
-        
-        # Get user settings to retrieve active public workspace ID
-        user_settings = get_user_settings(user_id)
-        active_public_workspace_id = user_settings.get("settings", {}).get("activePublicWorkspaceOid", "")
-        
-        public_settings = sanitize_settings_for_user(settings)
-        return render_template(
-            "my_public_workspaces.html",
-            settings=public_settings,
-            app_settings=public_settings,
-            can_create_public_workspaces=can_create_public_workspaces,
-            active_public_workspace_id=active_public_workspace_id
-        )
+        return redirect(url_for('frontend_profile.profile', tab='public-workspaces'))
 
-    @app.route("/public_workspaces/<workspace_id>", methods=["GET"])
+    @bp.route("/public_workspaces/<workspace_id>", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
     @enabled_required("enable_public_workspaces")
     def manage_public_workspace(workspace_id):
+        user_id = get_current_user_id()
         settings = get_settings()
         public_settings = sanitize_settings_for_user(settings)
+        try:
+            assert_public_workspace_role(user_id, workspace_id, allowed_roles=FILE_SYNC_MANAGER_ROLES)
+            user_info = get_current_user_info() or {}
+            file_sync_enabled = is_file_sync_enabled_for_public_workspace(settings, workspace_id, user_info=user_info)
+        except (LookupError, PermissionError):
+            file_sync_enabled = False
         return render_template(
             "manage_public_workspace.html",
             settings=public_settings,
             app_settings=public_settings,
-            workspace_id=workspace_id
+            workspace_id=workspace_id,
+            file_sync_enabled=file_sync_enabled
         )
     
-    @app.route("/public_workspaces", methods=["GET"])
+    @bp.route("/public_workspaces", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -88,7 +76,7 @@ def register_route_frontend_public_workspaces(app):
             allowed_extensions=allowed_extensions_str
         )
 
-    @app.route("/public_directory", methods=["GET"])
+    @bp.route("/public_directory", methods=["GET"])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -107,7 +95,7 @@ def register_route_frontend_public_workspaces(app):
             app_settings=public_settings
         )
 
-    @app.route('/set_active_public_workspace', methods=['POST'])
+    @bp.route('/set_active_public_workspace', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -123,4 +111,4 @@ def register_route_frontend_public_workspaces(app):
         except LookupError:
             return "Workspace not found", 404
 
-        return redirect(url_for('public_workspaces'))
+        return redirect(url_for('frontend_public_workspaces.public_workspaces'))

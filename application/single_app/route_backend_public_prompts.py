@@ -1,6 +1,7 @@
 # route_backend_public_prompts.py
 
 from config import *
+from flask import current_app
 
 from functions_authentication import *
 from functions_settings import *
@@ -9,11 +10,14 @@ from functions_prompts import *
 from swagger_wrapper import swagger_route, get_auth_security
 
 
-def _get_active_public_workspace_or_error(user_id):
+def _get_active_public_workspace_or_error(
+    user_id,
+    allowed_roles=("Owner", "Admin", "DocumentManager", "User"),
+):
     try:
         return require_active_public_workspace(
             user_id,
-            allowed_roles=("Owner", "Admin", "DocumentManager"),
+            allowed_roles=allowed_roles,
         ), None
     except ValueError:
         return None, (jsonify({'error': 'No active public workspace selected'}), 400)
@@ -22,12 +26,12 @@ def _get_active_public_workspace_or_error(user_id):
     except PermissionError:
         return None, (jsonify({'error': 'Access denied'}), 403)
 
-def register_route_backend_public_prompts(app):
+def register_route_backend_public_prompts(bp):
     """
     Backend routes for public-workspace–scoped prompts management
     """
 
-    @app.route('/api/public_prompts', methods=['GET'])
+    @bp.route('/api/public_prompts', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -53,17 +57,20 @@ def register_route_backend_public_prompts(app):
                 'total_count': total
             }), 200
         except Exception as e:
-            app.logger.error(f"Error listing public prompts: {e}")
+            current_app.logger.error(f"Error listing public prompts: {e}")
             return jsonify({'error':'Unexpected error'}), 500
 
-    @app.route('/api/public_prompts', methods=['POST'])
+    @bp.route('/api/public_prompts', methods=['POST'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
     @enabled_required('enable_public_workspaces')
     def api_create_public_prompt():
         user_id = get_current_user_id()
-        active_workspace_context, error_response = _get_active_public_workspace_or_error(user_id)
+        active_workspace_context, error_response = _get_active_public_workspace_or_error(
+            user_id,
+            allowed_roles=("Owner", "Admin", "DocumentManager"),
+        )
         if error_response:
             return error_response
         active_ws, _, _ = active_workspace_context
@@ -84,10 +91,10 @@ def register_route_backend_public_prompts(app):
             )
             return jsonify(result), 201
         except Exception as e:
-            app.logger.error(f"Error creating public prompt: {e}")
+            current_app.logger.error(f"Error creating public prompt: {e}")
             return jsonify({'error':'Unexpected error'}), 500
 
-    @app.route('/api/public_prompts/<prompt_id>', methods=['GET'])
+    @bp.route('/api/public_prompts/<prompt_id>', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
@@ -110,17 +117,20 @@ def register_route_backend_public_prompts(app):
                 return jsonify({'error':'Not found'}), 404
             return jsonify(item), 200
         except Exception as e:
-            app.logger.error(f"Error fetching public prompt {prompt_id}: {e}")
+            current_app.logger.error(f"Error fetching public prompt {prompt_id}: {e}")
             return jsonify({'error':'Unexpected error'}), 500
 
-    @app.route('/api/public_prompts/<prompt_id>', methods=['PATCH'])
+    @bp.route('/api/public_prompts/<prompt_id>', methods=['PATCH'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
     @enabled_required('enable_public_workspaces')
     def api_update_public_prompt(prompt_id):
         user_id = get_current_user_id()
-        active_workspace_context, error_response = _get_active_public_workspace_or_error(user_id)
+        active_workspace_context, error_response = _get_active_public_workspace_or_error(
+            user_id,
+            allowed_roles=("Owner", "Admin", "DocumentManager"),
+        )
         if error_response:
             return error_response
         active_ws, _, _ = active_workspace_context
@@ -150,17 +160,20 @@ def register_route_backend_public_prompts(app):
                 return jsonify({'error':'Not found'}), 404
             return jsonify(result), 200
         except Exception as e:
-            app.logger.error(f"Error updating public prompt {prompt_id}: {e}")
+            current_app.logger.error(f"Error updating public prompt {prompt_id}: {e}")
             return jsonify({'error':'Unexpected error'}), 500
 
-    @app.route('/api/public_prompts/<prompt_id>', methods=['DELETE'])
+    @bp.route('/api/public_prompts/<prompt_id>', methods=['DELETE'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
     @enabled_required('enable_public_workspaces')
     def api_delete_public_prompt(prompt_id):
         user_id = get_current_user_id()
-        active_workspace_context, error_response = _get_active_public_workspace_or_error(user_id)
+        active_workspace_context, error_response = _get_active_public_workspace_or_error(
+            user_id,
+            allowed_roles=("Owner", "Admin", "DocumentManager"),
+        )
         if error_response:
             return error_response
         active_ws, _, _ = active_workspace_context
@@ -175,5 +188,5 @@ def register_route_backend_public_prompts(app):
                 return jsonify({'error':'Not found'}), 404
             return jsonify({'message':'Deleted'}), 200
         except Exception as e:
-            app.logger.error(f"Error deleting public prompt {prompt_id}: {e}")
+            current_app.logger.error(f"Error deleting public prompt {prompt_id}: {e}")
             return jsonify({'error':'Unexpected error'}), 500

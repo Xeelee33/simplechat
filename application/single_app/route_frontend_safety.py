@@ -5,9 +5,9 @@ from functions_authentication import *
 from functions_settings import *
 from swagger_wrapper import swagger_route, get_auth_security
 
-def register_route_frontend_safety(app):
+def register_route_frontend_safety(bp):
 
-    @app.route('/admin/safety_violations', methods=['GET'])
+    @bp.route('/admin/safety_violations', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @safety_violation_admin_required
@@ -18,13 +18,14 @@ def register_route_frontend_safety(app):
         """
         return render_template('admin_safety_violations.html')
 
-    @app.route('/safety_violations', methods=['GET'])
+    @bp.route('/safety_violations', methods=['GET'])
     @swagger_route(security=get_auth_security())
     @login_required
     @user_required
     @enabled_required("enable_content_safety")
     def my_safety_violations():
         """
-        Displays the logged-in user's safety violations.
-        """        
-        return render_template('my_safety_violations.html')
+        Redirects the user to the consolidated profile violations tab.
+        """
+
+        return redirect(url_for('frontend_profile.profile', tab='violations'))

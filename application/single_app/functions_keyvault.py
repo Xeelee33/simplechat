@@ -8,6 +8,7 @@ from functions_authentication import *
 from functions_settings import *
 from enum import Enum
 import app_settings_cache
+from functions_snowflake_operations import SNOWFLAKE_PLUGIN_TYPE, SNOWFLAKE_SENSITIVE_ADDITIONAL_FIELDS
 
 try:
     from azure.identity import DefaultAzureCredential
@@ -26,6 +27,9 @@ supported_sources = [
     'action',
     'action-addset',
     'agent',
+    'backup',
+    'file-sync',
+    'identity',
     'model-endpoint',
     'other'
 ]
@@ -33,7 +37,8 @@ supported_sources = [
 supported_scopes = [
     'global',
     'user',
-    'group'
+    'group',
+    'public'
 ]
 
 supported_action_auth_types = [
@@ -52,6 +57,18 @@ MODEL_ENDPOINT_SENSITIVE_AUTH_FIELDS = {
     "api_key": {"api_key"},
     "client_secret": {"service_principal"},
 }
+AGENT_SENSITIVE_SECRET_FIELDS = [
+    {
+        "path": ("azure_openai_gpt_key",),
+        "secret_name": lambda agent_name: agent_name,
+        "enabled": lambda agent: not agent.get("enable_agent_gpt_apim", False),
+    },
+    {
+        "path": ("azure_agent_apim_gpt_subscription_key",),
+        "secret_name": lambda agent_name: agent_name,
+        "enabled": lambda agent: agent.get("enable_agent_gpt_apim", False),
+    },
+]
 REDACTED_SECRET_VALUE = "***REDACTED***"
 
 class SecretReturnType(Enum):
@@ -216,6 +233,20 @@ def _is_sql_sensitive_additional_field(plugin_dict, field_name):
     return _is_sql_plugin(plugin_dict) and field_name in SQL_PLUGIN_SENSITIVE_ADDITIONAL_FIELDS
 
 
+def _is_snowflake_plugin(plugin_dict):
+    """Return True when the plugin manifest is a Snowflake action."""
+    plugin_type = (plugin_dict or {}).get("type", "")
+    return isinstance(plugin_type, str) and plugin_type.lower() == SNOWFLAKE_PLUGIN_TYPE
+
+
+def _is_sensitive_plugin_additional_field(plugin_dict, field_name):
+    """Return True when an action additional field should be treated as a secret."""
+    return (
+        _is_sql_sensitive_additional_field(plugin_dict, field_name)
+        or (_is_snowflake_plugin(plugin_dict) and field_name in SNOWFLAKE_SENSITIVE_ADDITIONAL_FIELDS)
+    )
+
+
 def _store_plugin_secret_reference(updated_plugin, existing_plugin, path, secret_name, scope_value, source, scope):
     """Store or preserve a plugin secret reference for the provided nested path."""
     value = _get_nested_dict_value(updated_plugin, path)
@@ -283,6 +314,72 @@ def _store_plugin_secret_reference(updated_plugin, existing_plugin, path, secret
     _set_nested_dict_value(updated_plugin, path, full_secret_name)
 
 
+def _store_secret_reference(updated, existing, path, secret_name, scope_value, source, scope):
+    """Store or preserve a secret reference for a nested object path."""
+    value = _get_nested_dict_value(updated, path)
+    if value in (None, ""):
+        return
+
+    path_label = ".".join(path)
+    existing_reference = _get_existing_secret_reference(existing, path)
+
+    if value == ui_trigger_word:
+        if existing_reference:
+            if not secret_reference_matches_context(
+                existing_reference,
+                scope_value=scope_value,
+                scope=scope,
+                allowed_sources={source},
+            ):
+                _log_secret_reference_context_mismatch(
+                    existing_reference,
+                    f"field '{path_label}' existing reference",
+                    scope_value=scope_value,
+                    scope=scope,
+                    allowed_sources={source},
+                )
+                raise ValueError(
+                    f"Stored Key Vault reference for '{path_label}' no longer matches the expected scope. Re-enter the secret value."
+                )
+            _set_nested_dict_value(updated, path, existing_reference)
+            return
+        _set_nested_dict_value(
+            updated,
+            path,
+            build_full_secret_name(secret_name, scope_value, source, scope),
+        )
+        return
+
+    if validate_secret_name_dynamic(value):
+        if not secret_reference_matches_context(
+            value,
+            scope_value=scope_value,
+            scope=scope,
+            allowed_sources={source},
+        ):
+            _log_secret_reference_context_mismatch(
+                value,
+                f"field '{path_label}'",
+                scope_value=scope_value,
+                scope=scope,
+                allowed_sources={source},
+            )
+            raise ValueError(
+                f"Stored Key Vault reference for '{path_label}' does not match the expected scope."
+            )
+        _set_nested_dict_value(updated, path, value)
+        return
+
+    full_secret_name = store_secret_in_key_vault(
+        secret_name,
+        value,
+        scope_value,
+        source=source,
+        scope=scope,
+    )
+    _set_nested_dict_value(updated, path, full_secret_name)
+
+
 def redact_plugin_secret_values(plugin_dict, redaction_value=REDACTED_SECRET_VALUE):
     """Return a copy of the plugin manifest with secret-bearing values redacted."""
     if not isinstance(plugin_dict, dict):
@@ -305,7 +402,7 @@ def redact_plugin_secret_values(plugin_dict, redaction_value=REDACTED_SECRET_VAL
         for key, value in additional_fields.items():
             if not value:
                 continue
-            if key.endswith("__Secret") or _is_sql_sensitive_additional_field(redacted, key):
+            if key.endswith("__Secret") or _is_sensitive_plugin_additional_field(redacted, key):
                 new_additional_fields[key] = redaction_value
         redacted["additionalFields"] = new_additional_fields
 
@@ -516,15 +613,16 @@ def validate_secret_name_dynamic(secret_name):
     """
     return parse_secret_name_dynamic(secret_name) is not None
 
-def keyvault_agent_save_helper(agent_dict, scope_value, scope="global"):
+def keyvault_agent_save_helper(agent_dict, scope_value, scope="global", existing_agent=None):
     """
     For agent dicts, store sensitive keys in Key Vault and replace their values with the Key Vault secret name.
-    Only processes 'azure_agent_apim_gpt_subscription_key' and 'azure_openai_gpt_key'.
+    Processes top-level agent keys and supported nested Foundry runtime API keys.
 
     Args:
         agent_dict (dict): The agent dictionary to process.
         scope_value (str): The value for the scope (e.g., agent id).
         scope (str): The scope (e.g., 'user', 'global').
+        existing_agent (dict, optional): Existing stored agent used to preserve secret references during edit flows.
 
     Returns:
         dict: A new agent dict with sensitive values replaced by Key Vault references.
@@ -539,30 +637,40 @@ def keyvault_agent_save_helper(agent_dict, scope_value, scope="global"):
     source = "agent"
     updated = dict(agent_dict)
     agent_name = updated.get('name', 'agent')
-    use_apim = updated.get('enable_agent_gpt_apim', False)
-    key = 'azure_agent_apim_gpt_subscription_key' if use_apim else 'azure_openai_gpt_key'
-    if key in updated and updated[key]:
-        value = updated[key]
-        secret_name = agent_name
-        if value == ui_trigger_word:
-            updated[key] = build_full_secret_name(secret_name, scope_value, source, scope)
-        elif validate_secret_name_dynamic(value):
-            updated[key] = build_full_secret_name(secret_name, scope_value, source, scope)
-        else:
-            try:
-                full_secret_name = store_secret_in_key_vault(secret_name, value, scope_value, source=source, scope=scope)
-                updated[key] = full_secret_name
-            except Exception as e:
-                log_event(f"Failed to store agent key '{key}' in Key Vault: {e}", level=logging.ERROR, exceptionTraceback=True)
-                raise Exception(f"Failed to store agent key '{key}' in Key Vault: {e}")
-    else:
-        log_event(f"Agent key '{key}' not found while APIM is '{use_apim}' or empty in agent '{agent_name}'. No action taken.", level=logging.INFO)
+    for field in AGENT_SENSITIVE_SECRET_FIELDS:
+        if not field["enabled"](updated):
+            continue
+        path = field["path"]
+        secret_name = field["secret_name"](agent_name)
+        if _get_nested_dict_value(updated, path) in (None, ""):
+            log_event(
+                f"Agent key '{'.'.join(path)}' not found or empty in agent '{agent_name}'. No action taken.",
+                level=logging.INFO,
+            )
+            continue
+        try:
+            _store_secret_reference(
+                updated,
+                existing_agent,
+                path,
+                secret_name,
+                scope_value,
+                source,
+                scope,
+            )
+        except Exception as e:
+            log_event(
+                f"Failed to store agent key '{'.'.join(path)}' in Key Vault: {e}",
+                level=logging.ERROR,
+                exceptionTraceback=True,
+            )
+            raise Exception(f"Failed to store agent key '{'.'.join(path)}' in Key Vault: {e}")
     return updated
 
 def keyvault_agent_get_helper(agent_dict, scope_value, scope="global", return_type=SecretReturnType.TRIGGER):
     """
     For agent dicts, retrieve sensitive keys from Key Vault if they are stored as Key Vault references.
-    Only processes 'azure_agent_apim_gpt_subscription_key' and 'azure_openai_gpt_key'.
+    Processes top-level agent keys and supported nested Foundry runtime API keys.
 
     Args:
         agent_dict (dict): The agent dictionary to process.
@@ -582,22 +690,35 @@ def keyvault_agent_get_helper(agent_dict, scope_value, scope="global", return_ty
         return agent_dict
     updated = dict(agent_dict)
     agent_name = updated.get('name', 'agent')
-    use_apim = updated.get('enable_agent_gpt_apim', False)
-    key = 'azure_agent_apim_gpt_subscription_key' if use_apim else 'azure_openai_gpt_key'
-    if key in updated and updated[key]:
-        value = updated[key]
-        if validate_secret_name_dynamic(value):
-            try:
-                if return_type == SecretReturnType.VALUE:
-                    actual_key = retrieve_secret_from_key_vault_by_full_name(value)
-                    updated[key] = actual_key
-                elif return_type == SecretReturnType.NAME:
-                    updated[key] = value
-                else:
-                    updated[key] = ui_trigger_word
-            except Exception as e:
-                log_event(f"Failed to retrieve agent key '{key}' for agent '{agent_name}' from Key Vault: {e}", level=logging.ERROR, exceptionTraceback=True)
-                return updated
+    for field in AGENT_SENSITIVE_SECRET_FIELDS:
+        if not field["enabled"](updated):
+            continue
+        path = field["path"]
+        value = _get_nested_dict_value(updated, path)
+        if value == ui_trigger_word:
+            value = build_full_secret_name(
+                field["secret_name"](agent_name),
+                scope_value,
+                "agent",
+                scope,
+            )
+        if not value or not validate_secret_name_dynamic(value):
+            continue
+        try:
+            if return_type == SecretReturnType.VALUE:
+                actual_key = retrieve_secret_from_key_vault_by_full_name(value)
+                _set_nested_dict_value(updated, path, actual_key)
+            elif return_type == SecretReturnType.NAME:
+                _set_nested_dict_value(updated, path, value)
+            else:
+                _set_nested_dict_value(updated, path, ui_trigger_word)
+        except Exception as e:
+            log_event(
+                f"Failed to retrieve agent key '{'.'.join(path)}' for agent '{agent_name}' from Key Vault: {e}",
+                level=logging.ERROR,
+                exceptionTraceback=True,
+            )
+            return updated
     return updated
 
 def keyvault_plugin_save_helper(plugin_dict, scope_value, scope="global", existing_plugin=None):
@@ -694,7 +815,7 @@ def keyvault_plugin_save_helper(plugin_dict, scope_value, scope="global", existi
                 except Exception as e:
                     log_event(f"Failed to store plugin additionalField secret '{k}' in Key Vault: {e}", level=logging.ERROR, exceptionTraceback=True)
                     raise Exception(f"Failed to store plugin additionalField secret '{k}' in Key Vault: {e}")
-            elif _is_sql_sensitive_additional_field(updated, k):
+            elif _is_sensitive_plugin_additional_field(updated, k):
                 addset_source = 'action-addset'
                 akv_key = _build_plugin_additional_field_secret_name(plugin_name, k)
                 try:
@@ -709,11 +830,11 @@ def keyvault_plugin_save_helper(plugin_dict, scope_value, scope="global", existi
                     )
                 except Exception as e:
                     log_event(
-                        f"Failed to store SQL plugin additionalField secret '{k}' in Key Vault: {e}",
+                        f"Failed to store plugin additionalField secret '{k}' in Key Vault: {e}",
                         level=logging.ERROR,
                         exceptionTraceback=True,
                     )
-                    raise Exception(f"Failed to store SQL plugin additionalField secret '{k}' in Key Vault: {e}")
+                    raise Exception(f"Failed to store plugin additionalField secret '{k}' in Key Vault: {e}")
     return updated
 # Helper to retrieve plugin secrets from Key Vault
 def keyvault_plugin_get_helper(plugin_dict, scope_value, scope="global", return_type=SecretReturnType.TRIGGER):
@@ -771,7 +892,7 @@ def keyvault_plugin_get_helper(plugin_dict, scope_value, scope="global", return_
     if isinstance(additional_fields, dict):
         new_additional_fields = dict(additional_fields)
         for k, v in additional_fields.items():
-            if (k.endswith('__Secret') or _is_sql_sensitive_additional_field(updated, k)) and v and validate_secret_name_dynamic(v):
+            if (k.endswith('__Secret') or _is_sensitive_plugin_additional_field(updated, k)) and v and validate_secret_name_dynamic(v):
                 try:
                     is_expected_reference = secret_reference_matches_context(
                         v,
@@ -1010,7 +1131,7 @@ def keyvault_plugin_delete_helper(plugin_dict, scope_value, scope="global"):
     additional_fields = plugin_dict.get('additionalFields', {})
     if isinstance(additional_fields, dict):
         for k, v in additional_fields.items():
-            if (k.endswith('__Secret') or _is_sql_sensitive_additional_field(plugin_dict, k)) and v and validate_secret_name_dynamic(v):
+            if (k.endswith('__Secret') or _is_sensitive_plugin_additional_field(plugin_dict, k)) and v and validate_secret_name_dynamic(v):
                 if not secret_reference_matches_context(
                     v,
                     scope_value=scope_value,
@@ -1039,7 +1160,7 @@ def keyvault_plugin_delete_helper(plugin_dict, scope_value, scope="global"):
 def keyvault_agent_delete_helper(agent_dict, scope_value, scope="global"):
     """
     For agent dicts, delete sensitive keys from Key Vault if they are stored as Key Vault references.
-    Only processes 'azure_agent_apim_gpt_subscription_key' and 'azure_openai_gpt_key'.
+    Processes top-level agent keys and supported nested Foundry runtime API keys.
 
     Args:
         agent_dict (dict): The agent dictionary to process.
@@ -1057,20 +1178,28 @@ def keyvault_agent_delete_helper(agent_dict, scope_value, scope="global"):
     source = "agent"
     updated = dict(agent_dict)
     agent_name = updated.get('name', 'agent')
-    use_apim = updated.get('enable_agent_gpt_apim', False)
-    keys = ['azure_agent_apim_gpt_subscription_key'] if use_apim else ['azure_openai_gpt_key']
-    for key in keys:
-        if key in updated and updated[key]:
-            secret_name = updated[key]
-            if validate_secret_name_dynamic(secret_name):
-                try:
-                    key_vault_url = f"https://{key_vault_name}{KEY_VAULT_DOMAIN}"
-                    log_event(f"Deleting agent secret '{secret_name}' for agent '{agent_name}' for '{scope}' '{scope_value}'", level=logging.INFO)
-                    client = SecretClient(vault_url=key_vault_url, credential=get_keyvault_credential())
-                    client.begin_delete_secret(secret_name)
-                except Exception as e:
-                    log_event(f"Error deleting secret '{secret_name}' for agent '{agent_name}': {e}", level=logging.ERROR, exceptionTraceback=True)
-                    raise Exception(f"Error deleting secret '{secret_name}' for agent '{agent_name}': {e}")
+    for field in AGENT_SENSITIVE_SECRET_FIELDS:
+        if not field["enabled"](updated):
+            continue
+        path = field["path"]
+        secret_name = _get_nested_dict_value(updated, path)
+        if secret_name == ui_trigger_word:
+            secret_name = build_full_secret_name(
+                field["secret_name"](agent_name),
+                scope_value,
+                source,
+                scope,
+            )
+        if not secret_name or not validate_secret_name_dynamic(secret_name):
+            continue
+        try:
+            key_vault_url = f"https://{key_vault_name}{KEY_VAULT_DOMAIN}"
+            log_event(f"Deleting agent secret '{secret_name}' for agent '{agent_name}' for '{scope}' '{scope_value}'", level=logging.INFO)
+            client = SecretClient(vault_url=key_vault_url, credential=get_keyvault_credential())
+            client.begin_delete_secret(secret_name)
+        except Exception as e:
+            log_event(f"Error deleting secret '{secret_name}' for agent '{agent_name}': {e}", level=logging.ERROR, exceptionTraceback=True)
+            raise Exception(f"Error deleting secret '{secret_name}' for agent '{agent_name}': {e}")
     return agent_dict
 
 def get_keyvault_credential(settings=None):
