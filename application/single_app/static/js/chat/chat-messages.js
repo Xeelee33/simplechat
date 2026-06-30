@@ -5609,18 +5609,13 @@ export function sendMessage() {
   updateSendButtonVisibility();
   // Keep focus on input
   userInput.focus();
-}
 
-export function actuallySendMessage(finalMessageToSend) {
-  // Generate a temporary message ID for the user message
-  const tempUserMessageId = `temp_user_${Date.now()}`;
-  
-  // Append user message first with temporary ID
-  appendMessage("You", finalMessageToSend, null, tempUserMessageId, false, [], [], [], null, null, null, true);
-  userInput.value = "";
-  userInput.style.height = "";
-  // Update send button visibility after clearing input
-  updateSendButtonVisibility();
+  // After sending, ensure the chat view scrolls so the
+  // user can see their newly submitted message.
+  if (typeof window.scrollChatToBottom === 'function') {
+    window.scrollChatToBottom();
+  }
+}
 
 function getCurrentModelSelection() {
   let modelDeployment = modelSelect?.value;
@@ -6268,7 +6263,7 @@ export function actuallySendMessage(finalMessageToSend) {
     }
 
     const pendingCollaborativeContext = window.chatCollaboration?.getPendingMessageContext?.({ invocationTarget }) || null;
-    appendMessage("You", displayMessageText, null, tempUserMessageId, false, [], [], [], null, null, pendingCollaborativeContext);
+    appendMessage("You", displayMessageText, null, tempUserMessageId, false, [], [], [], null, null, pendingCollaborativeContext, true);
     userInput.value = "";
     userInput.style.height = "";
     updateSendButtonVisibility();

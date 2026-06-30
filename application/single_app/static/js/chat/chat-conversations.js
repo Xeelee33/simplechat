@@ -1684,15 +1684,9 @@ export async function selectConversation(conversationId) {
     renderConversationHeaderBadges(convoItem);
   }
 
-  await loadMessages(conversationId);
-  scrollConversationViewToBottom();
-  try {
-    const streamingModule = await import('./chat-streaming.js');
-    await streamingModule.reattachStreamingConversation(conversationId);
-    scrollConversationViewToBottom();
-  } catch (error) {
-    console.warn('Failed to reattach active stream for conversation:', error);
   if (isCollaborativeConversation && window.chatCollaboration?.activateConversation) {
+    await loadMessages(conversationId);
+    scrollConversationViewToBottom();
     await window.chatCollaboration.activateConversation(conversationId, metadata);
   } else {
     window.chatCollaboration?.deactivateConversation?.();
@@ -1700,6 +1694,7 @@ export async function selectConversation(conversationId) {
     try {
       const streamingModule = await import('./chat-streaming.js');
       await streamingModule.reattachStreamingConversation(conversationId);
+      scrollConversationViewToBottom();
     } catch (error) {
       console.warn('Failed to reattach active stream for conversation:', error);
     }
