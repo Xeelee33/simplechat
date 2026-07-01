@@ -6823,6 +6823,10 @@
                                         {% if is_vision %}
                                             {% set option_value = m.deploymentName %}
                                             <option value="{{ option_value }}"
+                                                data-endpoint-id="{{ endpoint.id or '' }}"
+                                                data-model-id="{{ m.id or '' }}"
+                                                data-provider="{{ endpoint.provider or '' }}"
+                                                data-model-name="{{ m.modelName or '' }}"
                                                 {% if settings.multimodal_vision_model == option_value %}selected{% endif %}>
                                                 {{ m.displayName or m.deploymentName }} ({{ m.modelName }})
                                             </option>

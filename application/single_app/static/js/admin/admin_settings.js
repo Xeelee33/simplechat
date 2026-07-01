@@ -6072,12 +6072,23 @@ function setupTestButtons() {
             }
 
             const enableApim = document.getElementById('enable_gpt_apim').checked;
+            const selectedVisionOption = getSelectedVisionModelOption();
 
             const payload = {
                 test_type: 'multimodal_vision',
                 enable_apim: enableApim,
                 vision_model: visionModel
             };
+
+            if (!enableApim && selectedVisionOption?.dataset?.endpointId && selectedVisionOption?.dataset?.modelId) {
+                payload.multi_endpoint = {
+                    endpoint_id: selectedVisionOption.dataset.endpointId,
+                    model_id: selectedVisionOption.dataset.modelId,
+                    provider: selectedVisionOption.dataset.provider || '',
+                    model_name: selectedVisionOption.dataset.modelName || '',
+                    deployment_name: visionModel
+                };
+            }
 
             if (enableApim) {
                 payload.apim = {
@@ -6965,6 +6976,14 @@ function isVisionCapableModelName(modelName) {
     );
 }
 
+function getSelectedVisionModelOption() {
+    if (!visionSelect) {
+        return null;
+    }
+
+    return visionSelect.options[visionSelect.selectedIndex] || null;
+}
+
 function populateVisionModels() {
     if (!visionSelect) return;
 
@@ -6985,6 +7004,10 @@ function populateVisionModels() {
                         const value = m.deploymentName;
                         const label = `${m.displayName || m.deploymentName} (${m.modelName})`;
                         const opt = new Option(label, value);
+                        opt.dataset.endpointId = ep.id || '';
+                        opt.dataset.modelId = m.id || '';
+                        opt.dataset.provider = ep.provider || '';
+                        opt.dataset.modelName = m.modelName || '';
                         visionSelect.add(opt);
                     });
             });
