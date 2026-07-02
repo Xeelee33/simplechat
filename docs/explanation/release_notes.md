@@ -10,7 +10,7 @@ For feature-focused and fix-focused drill-downs by version, see [Features by Ver
     *   Fixed the Admin Settings Vision Model test button so multi-endpoint models are tested against their configured endpoint instead of always using the legacy GPT endpoint.
     *   Vision model options now preserve endpoint and model metadata for the test call while keeping the saved deployment-name value compatible with existing settings.
     *   Removed duplicate backend Vision test connection logic and preserved GPT-5/o-series token handling for Vision test requests.
-    *   (Ref: Vision Model test, multi-endpoint model endpoints, `admin_settings.js`, `admin_settings.html`, `route_backend_settings.py`)
+    *   (Ref: Vision Model test, multi-endpoint model endpoints, `admin_settings.js`, `admin_settings.html`, `route_backend_settings.py`, `MULTI_ENDPOINT_VISION_TEST_CONNECTION_FIX.md`)
 
 ### **(v0.250.007)**
 
