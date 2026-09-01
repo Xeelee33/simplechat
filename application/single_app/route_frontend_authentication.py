@@ -215,7 +215,8 @@ def register_route_frontend_authentication(bp):
 
         auth_url = msal_app.get_authorization_request_url(
             scopes=SCOPE, # Use SCOPE from config (includes offline_access)
-            redirect_uri=redirect_uri
+            redirect_uri=redirect_uri,
+            response_mode="form_post"
         )
         print("Redirecting to Azure AD for authentication.")
         #auth_url= auth_url.replace('https://', 'http://')  # Ensure HTTPS for security
@@ -226,17 +227,23 @@ def register_route_frontend_authentication(bp):
     def ci_auth_session():
         return create_ci_bearer_session()
 
-    @bp.route('/getAToken') # This is your redirect URI path
+    @bp.route('/getAToken', methods=['GET', 'POST']) # This is your redirect URI path
     @swagger_route(security=get_auth_security())
     def authorized():
-        # Check for errors passed back from Azure AD
-        if request.args.get('error'):
-            error = request.args.get('error')
-            error_description = request.args.get('error_description', 'No description provided.')
-            print(f"Azure AD Login Error: {error} - {error_description}")
-            return f"Login Error: {error} - {error_description}", 400 # Or render an error page
+        callback_values = request.values
 
-        code = request.args.get('code')
+        # Check for errors passed back from Azure AD
+        if callback_values.get('error'):
+            error = callback_values.get('error')
+            error_description = callback_values.get('error_description', 'No description provided.')
+            log_event(
+                "[AUTH_CALLBACK] Azure AD returned an error during login callback.",
+                extra={'error': error, 'error_description': error_description},
+                level=logging.WARNING,
+            )
+            return "Login Error: Unable to complete sign-in.", 400
+
+        code = callback_values.get('code')
         if not code:
             log_event(
                 "[AUTH_CALLBACK] OAuth callback reached without an authorization code; redirecting to sign-in.",
@@ -275,8 +282,12 @@ def register_route_frontend_authentication(bp):
 
         if "error" in result:
             error_description = result.get("error_description", result.get("error"))
-            print(f"Token acquisition failure: {error_description}")
-            return f"Login failure: {error_description}", 500
+            log_event(
+                "[AUTH_CALLBACK] Token acquisition failed during login callback.",
+                extra={'error_description': error_description},
+                level=logging.ERROR,
+            )
+            return "Login failure: Unable to acquire a sign-in token.", 500
 
         # --- Store results ---
         # Store user identity info (claims from ID token)
@@ -341,17 +352,23 @@ def register_route_frontend_authentication(bp):
         return redirect(url_for('public_app.index')) # Or another appropriate page
 
     # This route is for API calls that need a token, not the web app login flow. This does not kick off a session.
-    @bp.route('/getATokenApi') # This is your redirect URI path
+    @bp.route('/getATokenApi', methods=['GET', 'POST']) # This is your redirect URI path
     @swagger_route(security=get_auth_security())
     def authorized_api():
-        # Check for errors passed back from Azure AD
-        if request.args.get('error'):
-            error = request.args.get('error')
-            error_description = request.args.get('error_description', 'No description provided.')
-            print(f"Azure AD Login Error: {error} - {error_description}")
-            return f"Login Error: {error} - {error_description}", 400 # Or render an error page
+        callback_values = request.values
 
-        code = request.args.get('code')
+        # Check for errors passed back from Azure AD
+        if callback_values.get('error'):
+            error = callback_values.get('error')
+            error_description = callback_values.get('error_description', 'No description provided.')
+            log_event(
+                "[AUTH_CALLBACK] Azure AD returned an error during API token callback.",
+                extra={'error': error, 'error_description': error_description},
+                level=logging.WARNING,
+            )
+            return "Login Error: Unable to complete sign-in.", 400
+
+        code = callback_values.get('code')
         if not code:
             print("Authorization code not found in callback.")
             return "Authorization code not found", 400
@@ -381,8 +398,12 @@ def register_route_frontend_authentication(bp):
 
         if "error" in result:
             error_description = result.get("error_description", result.get("error"))
-            print(f"Token acquisition failure: {error_description}")
-            return f"Login failure: {error_description}", 500
+            log_event(
+                "[AUTH_CALLBACK] Token acquisition failed during API token callback.",
+                extra={'error_description': error_description},
+                level=logging.ERROR,
+            )
+            return "Login failure: Unable to acquire a sign-in token.", 500
 
         return jsonify(result, 200)
 

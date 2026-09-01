@@ -197,6 +197,7 @@ def get_consent_url(msal_app=None, scopes=None, redirect_uri=None, state=None, p
     redirect_uri = redirect_uri or REDIRECT_PATH
     auth_request_kwargs = {
         "redirect_uri": redirect_uri,
+        "response_mode": "form_post",
         "state": state,
     }
     if prompt:
