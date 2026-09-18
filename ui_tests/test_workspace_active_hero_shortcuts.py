@@ -1,7 +1,7 @@
 # test_workspace_active_hero_shortcuts.py
 """
 UI test for active workspace hero shortcuts.
-Version: 0.261.003.01
+Version: 0.261.002.02
 Implemented in: 0.241.125
 
 This test ensures the group and public workspace pages render the active hero
@@ -9,7 +9,7 @@ card branding at the top of the page and expose the manage shortcut for the
 selected workspace. Updated in 0.241.151 to validate public workspace dropdown
 search and implicit public User role display. Updated in 0.241.152 to validate
 public workspace search remains visible for smaller public workspace lists.
-Updated in 0.261.003.01 to validate the public workspace dropdown dark-theme
+Updated in 0.261.002.02 to validate the public workspace dropdown dark-theme
 colors match the group workspace selector.
 """
 
