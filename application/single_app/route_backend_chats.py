@@ -75,6 +75,7 @@ from functions_tabular_orchestration import (
     build_tabular_legacy_post_tool_fallback_decision as _shared_build_tabular_legacy_post_tool_fallback_decision,
     get_tabular_generated_output_format as _shared_get_tabular_generated_output_format,
     get_tabular_generated_output_task_type as _shared_get_tabular_generated_output_task_type,
+    question_requests_tabular_chart_recommendations as _shared_question_requests_tabular_chart_recommendations,
     question_requests_tabular_exhaustive_row_output as _shared_question_requests_tabular_exhaustive_row_output,
     question_requests_tabular_generated_output as _shared_question_requests_tabular_generated_output,
     question_requests_tabular_hierarchical_analysis as _shared_question_requests_tabular_hierarchical_analysis,
@@ -4645,6 +4646,11 @@ def is_tabular_entity_lookup_question(user_question):
     return any(re.search(pattern, normalized_question) for pattern in entity_lookup_patterns)
 
 
+def is_tabular_chart_recommendation_question(user_question):
+    """Return True for chart recommendation prompts that can be answered from workbook shape."""
+    return _shared_question_requests_tabular_chart_recommendations(user_question)
+
+
 def is_tabular_distinct_value_question(user_question):
     """Return True for unique-value questions that should start with get_distinct_values."""
     normalized_question = re.sub(r'\s+', ' ', str(user_question or '').strip().lower())
@@ -4723,6 +4729,8 @@ def get_tabular_execution_mode(user_question):
     """Select the tabular orchestration mode for the user's question."""
     if is_tabular_schema_summary_question(user_question):
         return 'schema_summary'
+    if is_tabular_chart_recommendation_question(user_question):
+        return 'chart_recommendation'
     if is_tabular_entity_lookup_question(user_question):
         return 'entity_lookup'
     if question_requests_tabular_exhaustive_results(user_question):
@@ -4739,6 +4747,14 @@ def build_tabular_fallback_system_message(tabular_filenames_str, execution_mode=
             "For workbook-structure questions such as what worksheets exist, what each worksheet represents, and how the sheets relate, answer from the schema summary only. "
             "Do not mention running additional plugin tools or performing calculations that were not completed. "
             "If a relationship is only implied by shared columns or names, describe it as an inferred relationship rather than a confirmed join."
+        )
+
+    if execution_mode == 'chart_recommendation':
+        return (
+            f"IMPORTANT: The selected workspace tabular file(s) are {tabular_filenames_str}. "
+            "The search results include workbook schema summaries with worksheet names, columns, row counts, and sample rows, but the chart-recommendation tool pass did not complete. "
+            "Recommend chart types from the visible workbook shape only. Focus on date/time columns for timeline charts, categorical columns for bar or stacked bar charts, and numeric or duration columns for measures. "
+            "Do not invent totals, render charts, or claim that aggregate calculations were completed."
         )
 
     return (
@@ -9599,6 +9615,189 @@ def build_tabular_schema_summary_fallback_from_invocations(user_question, invoca
     )
 
 
+def _classify_tabular_chart_columns(columns, dtypes=None):
+    """Classify visible columns into chart recommendation roles."""
+    dtypes = dtypes if isinstance(dtypes, dict) else {}
+    roles = {
+        'date': [],
+        'category': [],
+        'numeric': [],
+        'duration': [],
+    }
+    for column_name in columns or []:
+        rendered_column = str(column_name or '').strip()
+        if not rendered_column:
+            continue
+        normalized_column = rendered_column.casefold()
+        dtype = str(dtypes.get(rendered_column) or '').casefold()
+        is_numeric_dtype = any(token in dtype for token in ('int', 'float', 'decimal', 'number'))
+        is_datetime_name = any(
+            token in normalized_column
+            for token in ('date', 'time', 'month', 'quarter', 'year', 'workflow', 'begin', 'end', 'start', 'finish')
+        )
+        is_duration_name = any(
+            token in normalized_column
+            for token in ('duration', 'timeframe', 'elapsed', 'days', 'hours', 'age')
+        )
+        is_category_name = any(
+            token in normalized_column
+            for token in ('phase', 'status', 'category', 'type', 'owner', 'team', 'group', 'department')
+        )
+
+        if is_datetime_name:
+            roles['date'].append(rendered_column)
+        if is_duration_name or (is_numeric_dtype and not is_datetime_name):
+            roles['numeric'].append(rendered_column)
+        if is_duration_name:
+            roles['duration'].append(rendered_column)
+        if is_category_name or (not is_numeric_dtype and not is_datetime_name):
+            roles['category'].append(rendered_column)
+
+    return roles
+
+
+def _append_unique_chart_recommendation(recommendations, seen_keys, recommendation):
+    key = (
+        recommendation.get('sheet'),
+        recommendation.get('chart'),
+        recommendation.get('x_axis'),
+        recommendation.get('y_axis'),
+        recommendation.get('series'),
+    )
+    if key in seen_keys:
+        return
+    seen_keys.add(key)
+    recommendations.append(recommendation)
+
+
+def build_tabular_chart_recommendation_fallback_from_invocations(user_question, invocations):
+    """Build deterministic chart recommendations from workbook schema tool results."""
+    del user_question
+    workbook_summaries = []
+    recommendations = []
+    seen_recommendations = set()
+
+    for invocation in invocations or []:
+        if getattr(invocation, 'function_name', '') != 'describe_tabular_file':
+            continue
+        if get_tabular_invocation_error_message(invocation):
+            continue
+
+        result_payload = get_tabular_invocation_result_payload(invocation)
+        if not isinstance(result_payload, dict):
+            continue
+
+        filename = result_payload.get('filename') or 'workbook'
+        per_sheet_schemas = result_payload.get('per_sheet_schemas')
+        if isinstance(per_sheet_schemas, dict) and per_sheet_schemas:
+            sheet_items = per_sheet_schemas.items()
+        else:
+            sheet_name = result_payload.get('selected_sheet') or result_payload.get('sheet_name') or 'Sheet 1'
+            sheet_items = [(sheet_name, result_payload)]
+
+        for sheet_name, sheet_info in sheet_items:
+            if not isinstance(sheet_info, dict):
+                continue
+            columns = [str(column or '').strip() for column in sheet_info.get('columns') or [] if str(column or '').strip()]
+            if not columns:
+                continue
+
+            roles = _classify_tabular_chart_columns(columns, dtypes=sheet_info.get('dtypes'))
+            workbook_summaries.append({
+                'filename': filename,
+                'sheet': sheet_name,
+                'row_count': sheet_info.get('row_count', 0),
+                'columns': columns,
+            })
+
+            primary_category = (roles['category'] or columns[:1] or ['Category'])[0]
+            primary_measure = (roles['duration'] or roles['numeric'] or ['Record count'])[0]
+            primary_date = (roles['date'] or [None])[0]
+            secondary_date = (roles['date'][1:] or [None])[0]
+
+            if primary_category and primary_measure:
+                _append_unique_chart_recommendation(recommendations, seen_recommendations, {
+                    'sheet': sheet_name,
+                    'chart': 'bar chart',
+                    'x_axis': primary_category,
+                    'y_axis': primary_measure,
+                    'why': f"Compare {primary_measure} across {primary_category} values.",
+                })
+
+            if primary_date and primary_measure:
+                _append_unique_chart_recommendation(recommendations, seen_recommendations, {
+                    'sheet': sheet_name,
+                    'chart': 'timeline or line chart',
+                    'x_axis': primary_date,
+                    'y_axis': primary_measure,
+                    'why': f"Show how {primary_measure} changes along {primary_date}.",
+                })
+
+            if primary_category and primary_date:
+                _append_unique_chart_recommendation(recommendations, seen_recommendations, {
+                    'sheet': sheet_name,
+                    'chart': 'stacked bar chart',
+                    'x_axis': primary_category,
+                    'series': primary_date,
+                    'y_axis': 'Record count',
+                    'why': f"Show how records distribute by {primary_category} and {primary_date}.",
+                })
+
+            if primary_date and secondary_date:
+                _append_unique_chart_recommendation(recommendations, seen_recommendations, {
+                    'sheet': sheet_name,
+                    'chart': 'schedule or milestone chart',
+                    'x_axis': primary_date,
+                    'series': secondary_date,
+                    'y_axis': primary_category,
+                    'why': f"Compare start/end style workflow fields for each {primary_category}.",
+                })
+
+            if len(recommendations) >= 8:
+                break
+        if len(recommendations) >= 8:
+            break
+
+    if not workbook_summaries:
+        return None
+
+    rendered_lines = [
+        'Recommended charts from workbook structure:',
+        '',
+    ]
+    for index, recommendation in enumerate(recommendations[:6], start=1):
+        axis_parts = [
+            f"x-axis: {recommendation.get('x_axis')}",
+            f"y-axis: {recommendation.get('y_axis')}",
+        ]
+        if recommendation.get('series'):
+            axis_parts.append(f"series/grouping: {recommendation.get('series')}")
+        rendered_lines.append(
+            f"{index}. {recommendation.get('chart')} on {recommendation.get('sheet')} "
+            f"({'; '.join(axis_parts)}). {recommendation.get('why')}"
+        )
+
+    if not recommendations:
+        rendered_lines.append(
+            '1. Start with a bar chart of record counts by the strongest categorical column visible in the worksheet schema.'
+        )
+
+    rendered_lines.extend([
+        '',
+        'Basis: recommendations were generated from workbook schema only, including worksheet names, row counts, column names, and detected column roles. No aggregate totals were invented.',
+    ])
+
+    summary_payload = {
+        'workbooks': workbook_summaries[:10],
+        'recommendation_count': len(recommendations),
+    }
+    rendered_summary = json.dumps(summary_payload, indent=2, default=str)
+    if len(rendered_summary) <= 8000:
+        rendered_lines.extend(['', 'Workbook schema used:', rendered_summary])
+
+    return '\n'.join(rendered_lines)
+
+
 def get_tabular_invocation_selected_sheets(invocations):
     """Return unique selected-sheet names for a group of tabular invocations."""
     selected_sheets = []
@@ -12240,10 +12439,12 @@ async def run_tabular_sk_analysis(user_question, tabular_filenames, user_id,
         execution_mode = execution_mode if execution_mode in {
             'analysis',
             'schema_summary',
+            'chart_recommendation',
             'entity_lookup',
             'exhaustive',
         } else 'analysis'
         schema_summary_mode = execution_mode == 'schema_summary'
+        chart_recommendation_mode = execution_mode == 'chart_recommendation'
         entity_lookup_mode = execution_mode == 'entity_lookup'
         exhaustive_mode = execution_mode == 'exhaustive'
         fact_memory_enabled = bool(settings.get('enable_fact_memory_plugin', False))
@@ -12440,9 +12641,9 @@ async def run_tabular_sk_analysis(user_question, tabular_filenames, user_id,
                 }))
 
         schema_context = "\n".join(schema_parts)
-        allow_multi_sheet_discovery = has_multi_sheet_workbook and not schema_summary_mode
-        allowed_function_names = ['describe_tabular_file'] if schema_summary_mode else sorted(get_tabular_analysis_function_names())
-        attachment_search_function_names = [] if schema_summary_mode else get_tabular_attachment_search_function_names()
+        allow_multi_sheet_discovery = has_multi_sheet_workbook and not (schema_summary_mode or chart_recommendation_mode)
+        allowed_function_names = ['describe_tabular_file'] if schema_summary_mode or chart_recommendation_mode else sorted(get_tabular_analysis_function_names())
+        attachment_search_function_names = [] if schema_summary_mode or chart_recommendation_mode else get_tabular_attachment_search_function_names()
         if allow_multi_sheet_discovery:
             allowed_function_names = ['describe_tabular_file'] + allowed_function_names
         allowed_function_filters = {
@@ -12457,6 +12658,47 @@ async def run_tabular_sk_analysis(user_question, tabular_filenames, user_id,
 
         def build_system_prompt(force_tool_use=False, tool_error_messages=None,
                                 execution_gap_messages=None, discovery_feedback_messages=None):
+            if chart_recommendation_mode:
+                retry_prefix = ""
+                if force_tool_use:
+                    retry_prefix = (
+                        "RETRY MODE: Your previous attempt did not execute a usable workbook-schema tool call. "
+                        "You MUST call describe_tabular_file before writing chart recommendations. "
+                        "Do not switch to aggregate, filter, query, lookup, or grouped-analysis tools for chart recommendations.\n\n"
+                    )
+
+                tool_error_feedback = ""
+                if tool_error_messages:
+                    rendered_errors = "\n".join(
+                        f"- {error_message}" for error_message in tool_error_messages
+                    )
+                    tool_error_feedback = (
+                        "PREVIOUS TOOL ERRORS:\n"
+                        f"{rendered_errors}\n"
+                        "Correct the function arguments and retry describe_tabular_file immediately.\n\n"
+                    )
+
+                return (
+                    "You are a workbook visualization advisor. The user wants recommendations for meaningful charts and graphs, not a rendered chart or downloadable export. "
+                    "Use the workbook structure to recommend visualizations quickly. You MUST call describe_tabular_file before answering, and describe_tabular_file is the only available tool. "
+                    "Use the workbook-level response to identify worksheets, date/time columns, categorical dimensions, numeric or duration measures, and likely chart pairings.\n\n"
+                    f"{retry_prefix}"
+                    f"{tool_error_feedback}"
+                    f"FILE SCHEMAS:\n"
+                    f"{schema_context}\n\n"
+                    "AVAILABLE FUNCTIONS: describe_tabular_file only.\n\n"
+                    "IMPORTANT:\n"
+                    "1. Call describe_tabular_file once per workbook, omitting sheet_name for multi-sheet workbooks so the tool returns workbook-level sheet schemas.\n"
+                    "2. Recommend specific chart ideas tied to visible worksheet names and column names.\n"
+                    "3. Prefer line or timeline charts for date, milestone, begin-date, end-date, month, quarter, or year columns.\n"
+                    "4. Prefer bar or stacked bar charts for category-by-count or category-by-duration comparisons.\n"
+                    "5. Prefer scatter or bubble charts only when two numeric measures are visible.\n"
+                    "6. Prefer heatmaps only when the schema suggests a matrix, phase-by-period, or category-by-period comparison.\n"
+                    "7. Do not call aggregate, filter, query, lookup, grouped-analysis, or document-search tools.\n"
+                    "8. Do not invent computed totals. Phrase recommendations as chart opportunities and name what would be on each axis.\n"
+                    "9. Keep the answer concise and do not mention failed attempts unless the user explicitly asked about failures."
+                )
+
             if schema_summary_mode:
                 retry_prefix = ""
                 if force_tool_use:
@@ -12799,10 +13041,12 @@ async def run_tabular_sk_analysis(user_question, tabular_filenames, user_id,
         previous_tool_error_messages = []
         previous_execution_gap_messages = []
         previous_discovery_feedback_messages = []
-        analysis_requires_immediate_tool_choice = has_multi_sheet_workbook and not schema_summary_mode
+        analysis_requires_immediate_tool_choice = (has_multi_sheet_workbook and not schema_summary_mode) or chart_recommendation_mode
+        max_tabular_attempts = 1 if chart_recommendation_mode else 3
+        max_auto_tool_invocations = 4 if chart_recommendation_mode else 20
 
         if tabular_model_protocol == MODEL_ENDPOINT_PROTOCOL_ANTHROPIC:
-            if schema_summary_mode:
+            if schema_summary_mode or chart_recommendation_mode:
                 for file_context in analysis_file_contexts:
                     describe_arguments = {
                         'user_id': user_id,
@@ -12825,6 +13069,11 @@ async def run_tabular_sk_analysis(user_question, tabular_filenames, user_id,
                     get_new_plugin_invocations(invocations_after, baseline_invocation_count)
                 )
                 if schema_invocations:
+                    if chart_recommendation_mode:
+                        return build_tabular_chart_recommendation_fallback_from_invocations(
+                            user_question,
+                            schema_invocations,
+                        )
                     return build_tabular_schema_summary_fallback_from_invocations(
                         user_question,
                         schema_invocations,
@@ -12863,19 +13112,48 @@ async def run_tabular_sk_analysis(user_question, tabular_filenames, user_id,
             )
             return None
 
-        for attempt_number in range(1, 4):
+        if chart_recommendation_mode:
+            for file_context in analysis_file_contexts:
+                describe_arguments = {
+                    'user_id': user_id,
+                    'conversation_id': conversation_id,
+                    'filename': file_context['file_name'],
+                    'source': file_context.get('source_hint', source_hint),
+                }
+                if file_context.get('group_id'):
+                    describe_arguments['group_id'] = file_context.get('group_id')
+                if file_context.get('public_workspace_id'):
+                    describe_arguments['public_workspace_id'] = file_context.get('public_workspace_id')
+                await tabular_plugin.describe_tabular_file(**describe_arguments)
+
+            invocations_after = plugin_logger.get_invocations_for_conversation(
+                user_id,
+                conversation_id,
+                limit=1000,
+            )
+            schema_invocations = filter_tabular_citation_invocations(
+                get_new_plugin_invocations(invocations_after, baseline_invocation_count)
+            )
+            if schema_invocations:
+                return build_tabular_chart_recommendation_fallback_from_invocations(
+                    user_question,
+                    schema_invocations,
+                )
+            return None
+
+        for attempt_number in range(1, max_tabular_attempts + 1):
             attempt_started_at = time.monotonic()
             force_tool_use = attempt_number > 1 or (attempt_number == 1 and analysis_requires_immediate_tool_choice)
             if callable(thought_callback) and attempt_number > 1:
                 await emit_tabular_analysis_lifecycle_thought(
                     thought_callback,
-                    f"Retrying workbook analysis (attempt {attempt_number} of 3)",
+                    f"Retrying workbook analysis (attempt {attempt_number} of {max_tabular_attempts})",
                     detail='Continuing tabular analysis after the previous pass did not finish with a usable final answer.',
-                    title=f"Analyzing workbook evidence (attempt {attempt_number} of 3)",
+                    title=f"Analyzing workbook evidence (attempt {attempt_number} of {max_tabular_attempts})",
                     state='running',
                     phase='retry',
                     attempt_number=attempt_number,
-                    attempt_count=3,
+                    attempt_count=max_tabular_attempts,
                 )
 
             # 4. Build chat history with pre-loaded schemas
@@ -12907,12 +13185,12 @@ async def run_tabular_sk_analysis(user_question, tabular_filenames, user_id,
                 service_id="tabular-analysis",
                 function_choice_behavior=(
                     FunctionChoiceBehavior.Required(
-                        maximum_auto_invoke_attempts=20,
+                        maximum_auto_invoke_attempts=max_auto_tool_invocations,
                         filters=allowed_function_filters,
                     )
                     if force_tool_use else
                     FunctionChoiceBehavior.Auto(
-                        maximum_auto_invoke_attempts=20,
+                        maximum_auto_invoke_attempts=max_auto_tool_invocations,
                         filters=allowed_function_filters,
                     )
                 ),
@@ -13033,10 +13311,10 @@ async def run_tabular_sk_analysis(user_question, tabular_filenames, user_id,
                     analysis = analysis[:TABULAR_SK_ANALYSIS_MAX_CHARS] + "\n[Analysis truncated]"
                 attempt_elapsed_ms = int((time.monotonic() - attempt_started_at) * 1000)
 
-                if schema_summary_mode:
+                if schema_summary_mode or chart_recommendation_mode:
                     if successful_schema_summary_invocations:
                         log_event(
-                            f"[TABULAR_SK_ANALYSIS] Schema summary complete via {len(successful_schema_summary_invocations)} workbook tool call(s) on attempt {attempt_number}",
+                            f"[TABULAR_SK_ANALYSIS] {execution_mode} complete via {len(successful_schema_summary_invocations)} workbook tool call(s) on attempt {attempt_number}",
                             extra={
                                 'attempt_number': attempt_number,
                                 'elapsed_ms': attempt_elapsed_ms,
@@ -13256,7 +13534,7 @@ async def run_tabular_sk_analysis(user_question, tabular_filenames, user_id,
                         )
 
             else:
-                if schema_summary_mode and failed_schema_summary_invocations:
+                if (schema_summary_mode or chart_recommendation_mode) and failed_schema_summary_invocations:
                     previous_tool_error_messages = summarize_tabular_invocation_errors(failed_schema_summary_invocations)
                     log_event(
                         f"[TABULAR_SK_ANALYSIS] Attempt {attempt_number} returned no content after workbook tool errors; retrying",
@@ -13287,7 +13565,7 @@ async def run_tabular_sk_analysis(user_question, tabular_filenames, user_id,
             baseline_invocation_count = len(invocations_after)
 
         reviewer_recovery = None
-        if has_multi_sheet_workbook and not schema_summary_mode:
+        if has_multi_sheet_workbook and not (schema_summary_mode or chart_recommendation_mode):
             reviewer_recovery = await maybe_recover_tabular_analysis_with_llm_reviewer(
                 chat_service=chat_service,
                 kernel=kernel,
@@ -13561,7 +13839,7 @@ def _execute_mixed_source_tabular_evidence(
             invocations_after,
             baseline_invocation_count,
         )
-        if execution_mode == 'schema_summary':
+        if execution_mode in {'schema_summary', 'chart_recommendation'}:
             successful_source_invocations = [
                 invocation
                 for invocation in source_invocations

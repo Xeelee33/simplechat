@@ -239,6 +239,7 @@ from functions_tabular_analysis import (
     orchestrate_tabular_request as _shared_orchestrate_tabular_request,
     queue_direct_tabular_generated_output_from_plan as _shared_queue_direct_tabular_generated_output_from_plan,
 )
+from functions_tabular_orchestration import question_requests_tabular_chart_recommendations
 from functions_tabular_generated_exports import (
     build_background_tabular_generated_output_metadata,
     build_tabular_generated_output_row_batches,
@@ -3968,6 +3969,7 @@ def _maybe_execute_tabular_document_action(
         )
     generated_tabular_outputs = []
     task_prompt = str(workflow.get('task_prompt', '') or '').strip()
+    tabular_execution_mode = 'chart_recommendation' if question_requests_tabular_chart_recommendations(task_prompt) else 'analysis'
     tabular_post_processing_thought_callback = _build_tabular_document_action_thought_callback(
         thought_tracker=thought_tracker,
         live_thought_callback=live_thought_callback,
@@ -4046,7 +4048,7 @@ def _maybe_execute_tabular_document_action(
                     source_hint=tabular_document.get('source_hint', 'workspace'),
                     group_id=tabular_document.get('group_id'),
                     public_workspace_id=tabular_document.get('public_workspace_id'),
-                    execution_mode='analysis',
+                    execution_mode=tabular_execution_mode,
                     tabular_file_contexts=[tabular_file_context],
                     model_context=tabular_model_context,
                     thought_tracker=thought_tracker,
@@ -4224,6 +4226,32 @@ def _maybe_execute_tabular_document_action(
             'reduction',
             request_correlation_id=request_correlation_id,
         )
+        if tabular_execution_mode == 'chart_recommendation':
+            direct_reply = '\n\n'.join(
+                str(tabular_document.get('analysis') or '').strip()
+                for tabular_document in tabular_documents
+                if str(tabular_document.get('analysis') or '').strip()
+            ).strip()
+            if not direct_reply:
+                raise RuntimeError('Tabular chart recommendation returned an empty response.')
+            analysis_result = {
+                'reply': direct_reply,
+                'analysis_reply': direct_reply,
+                'coverage': _build_tabular_document_action_coverage(tabular_documents, 'Analysis complete'),
+                'documents': [],
+                'document_ids': [tabular_document.get('document_id') for tabular_document in tabular_documents],
+                'doc_scope': action_config.get('doc_scope'),
+                'window_unit': 'tabular',
+                'window_size': None,
+                'window_percent': None,
+            }
+            analysis_result['documents'] = analysis_result['coverage'].get('documents', [])
+            return {
+                'result': analysis_result,
+                'agent_citations': tabular_agent_citations,
+                'generated_tabular_outputs': generated_tabular_outputs,
+            }
+
         analysis_result = {
             'reply': '',
             'analysis_reply': str(invoke_prompt(

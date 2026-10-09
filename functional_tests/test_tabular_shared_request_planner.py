@@ -1,8 +1,8 @@
 # test_tabular_shared_request_planner.py
 """
 Functional test for the shared tabular request planner.
-Version: 0.250.177
-Implemented in: 0.250.158; Phase 6 execution units added in 0.250.162; rollout and fingerprint hardening in 0.250.167; Phase 7 harness compatibility in 0.250.177
+Version: 0.261.057
+Implemented in: 0.250.158; Phase 6 execution units added in 0.250.162; rollout and fingerprint hardening in 0.250.167; Phase 7 harness compatibility in 0.250.177; chart recommendation foreground routing in 0.261.054
 
 This test ensures Phase 2 tabular request planning classifies Search and
 Analyze caller metadata through one route-neutral planner before row retrieval.
@@ -30,13 +30,16 @@ if APP_ROOT not in sys.path:
 def install_lightweight_planner_dependency_stubs():
     assistant_exports_module = types.ModuleType("functions_assistant_table_exports")
     assistant_exports_module.assistant_table_export_requested = (
-        lambda prompt: "csv" in str(prompt or "").lower()
+        lambda prompt: "csv" in str(prompt or "").lower() or "spreadsheet" in str(prompt or "").lower()
     )
     generated_exports_module = types.ModuleType("functions_generated_file_exports")
 
     def get_requested_artifact_formats(prompt):
         normalized_prompt = str(prompt or "").lower()
-        return [output_format for output_format in ("json", "xml", "csv") if output_format in normalized_prompt]
+        formats = [output_format for output_format in ("json", "xml", "csv") if output_format in normalized_prompt]
+        if "spreadsheet" in normalized_prompt and "csv" not in formats:
+            formats.append("csv")
+        return formats
 
     generated_exports_module.get_requested_artifact_formats = get_requested_artifact_formats
     generated_exports_module.get_requested_structured_artifact_format = (
@@ -62,6 +65,7 @@ from functions_tabular_orchestration import (  # noqa: E402
     normalize_tabular_request_planner_mode,
     orchestrate_tabular_request,
     plan_tabular_request,
+    question_requests_tabular_chart_recommendations,
     question_requests_tabular_generated_output,
     question_requests_tabular_hierarchical_analysis,
 )
@@ -366,6 +370,28 @@ def test_compatibility_intent_helpers_delegate_to_shared_contract():
     print("Compatibility helper checks passed")
 
 
+def test_chart_recommendation_prompt_stays_foreground():
+    print("Testing chart recommendation prompt foreground routing...")
+    assert_app_version_at_least("0.261.054")
+    prompt = "What meaningful charts and graphs do you recommend creating from the data in this spreadsheet?"
+
+    assert_true(
+        question_requests_tabular_chart_recommendations(prompt),
+        "chart recommendation intent",
+    )
+    plan = plan_for(prompt, caller="analyze", contexts=[build_context("test-data.xlsx", source_hint="chat")])
+    assert_equal(
+        plan["execution_contract"],
+        TABULAR_EXECUTION_CONTRACT_FOREGROUND_AGGREGATE,
+        "chart recommendation execution contract",
+    )
+    assert_equal(plan["durable_task_type"], None, "chart recommendation durable task type")
+    assert_equal(plan["generated_output_requested"], False, "chart recommendation generated output flag")
+    assert_equal(plan["requested_output_formats"], [], "chart recommendation output formats")
+    assert_equal(plan["reason_code"], "bounded_foreground", "chart recommendation reason code")
+    print("Chart recommendation foreground routing checks passed")
+
+
 def test_shadow_and_active_facade_side_effect_boundaries():
     print("Testing shadow and active facade side-effect boundaries...")
     calls = []
@@ -547,6 +573,7 @@ def run_tests():
         test_replayable_context_boundaries,
         test_phase6_multifile_execution_units_are_explicit,
         test_compatibility_intent_helpers_delegate_to_shared_contract,
+        test_chart_recommendation_prompt_stays_foreground,
         test_shadow_and_active_facade_side_effect_boundaries,
         test_backend_rollout_settings_are_not_frontend_visible,
         test_active_facade_can_use_existing_direct_preflight_adapter,

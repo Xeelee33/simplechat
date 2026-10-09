@@ -279,6 +279,60 @@ def question_requests_tabular_generated_output(user_question):
     return any(marker in normalized_question for marker in exhaustive_markers)
 
 
+def question_requests_tabular_chart_recommendations(user_question):
+    """Return True when the prompt asks which charts would be useful, not for an export."""
+    normalized_question = re.sub(r"\s+", " ", str(user_question or "").strip().lower())
+    if not normalized_question:
+        return False
+
+    chart_terms = (
+        "chart",
+        "charts",
+        "graph",
+        "graphs",
+        "plot",
+        "plots",
+        "visualization",
+        "visualizations",
+        "visualisation",
+        "visualisations",
+    )
+    recommendation_terms = (
+        "recommend",
+        "recommendation",
+        "recommendations",
+        "suggest",
+        "suggestion",
+        "suggestions",
+        "meaningful",
+        "useful",
+        "best",
+        "appropriate",
+        "worth creating",
+        "should create",
+        "should be created",
+    )
+    explicit_export_terms = (
+        "download",
+        "export",
+        "save",
+        "attach",
+        "artifact",
+        "file",
+        "csv",
+        "json",
+        "xml",
+        "docx",
+        "pdf",
+    )
+
+    return (
+        any(term in normalized_question for term in chart_terms)
+        and any(term in normalized_question for term in recommendation_terms)
+        and not any(term in normalized_question for term in explicit_export_terms)
+    )
+
+
 def question_requests_tabular_hierarchical_analysis(user_question):
     """Return True when the prompt asks for whole-dataset row-level synthesis."""
     normalized_question = str(user_question or "").strip().lower()
@@ -644,9 +698,14 @@ def plan_tabular_request(
     output_hints = dict(requested_output_hints or {}) if isinstance(requested_output_hints, Mapping) else {}
     normalized_action_mode = str(action_mode or "").strip().lower()
     analysis_required = normalized_action_mode == "analyze"
-    requested_output_formats = get_requested_artifact_formats(user_question)
-    structured_output_formats = get_tabular_generated_output_formats(user_question)
-    generated_output_requested = question_requests_tabular_generated_output(user_question)
+    chart_recommendation_requested = question_requests_tabular_chart_recommendations(user_question)
+    requested_output_formats = [] if chart_recommendation_requested else get_requested_artifact_formats(user_question)
+    structured_output_formats = [] if chart_recommendation_requested else get_tabular_generated_output_formats(user_question)
+    generated_output_requested = (
+        False
+        if chart_recommendation_requested
+        else question_requests_tabular_generated_output(user_question)
+    )
     hierarchical_analysis_requested = question_requests_tabular_hierarchical_analysis(user_question)
     exhaustive_row_output_requested = question_requests_tabular_exhaustive_row_output(user_question)
     exhaustive_narrative_row_output_requested = bool(
