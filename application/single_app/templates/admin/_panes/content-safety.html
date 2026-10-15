@@ -134,6 +134,29 @@
 
 
                         <div class="mb-3">
+                            <label for="content_safety_block_threshold" class="form-label">
+                                Prompt Block Severity Threshold
+                                <span class="badge text-bg-secondary" id="content_safety_block_threshold_value">
+                                    {{ settings.content_safety_block_threshold | default(4) }}
+                                </span>
+                            </label>
+                            <input
+                                type="range"
+                                class="form-range"
+                                id="content_safety_block_threshold"
+                                name="content_safety_block_threshold"
+                                min="2"
+                                max="7"
+                                step="1"
+                                value="{{ settings.content_safety_block_threshold | default(4) }}"
+                                aria-describedby="content_safety_block_threshold_help"
+                            >
+                            <div class="form-text" id="content_safety_block_threshold_help">
+                                Blocks and records prompts when any Azure Content Safety category severity is at or above this value. Lower values are more restrictive; default is 4.
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
                             <label for="content_safety_violation_message" class="form-label">
                                 Safety Violation Message <span class="text-muted fw-normal">(Markdown supported)</span>
                             </label>

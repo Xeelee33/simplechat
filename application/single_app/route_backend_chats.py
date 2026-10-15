@@ -116,7 +116,10 @@ from functions_service_health import (
     SEMANTIC_SEARCH_QUOTA_WARNING_TYPE,
     SemanticSearchQuotaExceededError,
 )
-from functions_content_safety import build_content_safety_violation_message
+from functions_content_safety import (
+    build_content_safety_violation_message,
+    get_content_safety_block_threshold,
+)
 from functions_settings import *
 from functions_assigned_knowledge import (
     ASSIGNED_KNOWLEDGE_USER_ACTION_ANALYZE,
@@ -18335,10 +18338,10 @@ def register_route_backend_chats(bp):
                                 "blocklistItemText": match.blocklist_item_text
                             })
 
-                    # Example: If severity >=4 or blocklist, we call it "blocked"
-                    if max_severity >= 4:
+                    block_threshold = get_content_safety_block_threshold(settings)
+                    if max_severity >= block_threshold:
                         blocked = True
-                        block_reasons.append("Max severity >= 4")
+                        block_reasons.append(f"Max severity >= {block_threshold}")
                     if len(blocklist_matches) > 0:
                         blocked = True
                         block_reasons.append("Blocklist match")
@@ -22976,9 +22979,10 @@ def register_route_backend_chats(bp):
                                     "blocklistItemText": match.blocklist_item_text
                                 })
 
-                        if max_severity >= 4:
+                        block_threshold = get_content_safety_block_threshold(settings)
+                        if max_severity >= block_threshold:
                             blocked = True
-                            block_reasons.append("Max severity >= 4")
+                            block_reasons.append(f"Max severity >= {block_threshold}")
                         if len(blocklist_matches) > 0:
                             blocked = True
                             block_reasons.append("Blocklist match")

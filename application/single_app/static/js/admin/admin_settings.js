@@ -6914,6 +6914,17 @@ function setupToggles() {
         });
     }
 
+    const contentSafetyBlockThreshold = document.getElementById('content_safety_block_threshold');
+    const contentSafetyBlockThresholdValue = document.getElementById('content_safety_block_threshold_value');
+    if (contentSafetyBlockThreshold && contentSafetyBlockThresholdValue) {
+        const updateContentSafetyBlockThresholdValue = () => {
+            contentSafetyBlockThresholdValue.textContent = contentSafetyBlockThreshold.value;
+        };
+        updateContentSafetyBlockThresholdValue();
+        contentSafetyBlockThreshold.addEventListener('input', updateContentSafetyBlockThresholdValue);
+        contentSafetyBlockThreshold.addEventListener('change', markFormAsModified);
+    }
+
     const enableContentSafetyApim = document.getElementById('enable_content_safety_apim');
     if (enableContentSafetyApim) {
         enableContentSafetyApim.addEventListener('change', function() {

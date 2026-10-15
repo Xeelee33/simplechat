@@ -3,6 +3,9 @@
 
 CONTENT_SAFETY_VIOLATION_MESSAGE_DEFAULT = 'Your message was blocked by Content Safety.'
 CONTENT_SAFETY_VIOLATION_MESSAGE_MAX_LENGTH = 3000
+CONTENT_SAFETY_BLOCK_THRESHOLD_DEFAULT = 4
+CONTENT_SAFETY_BLOCK_THRESHOLD_MIN = 2
+CONTENT_SAFETY_BLOCK_THRESHOLD_MAX = 7
 
 
 def normalize_content_safety_violation_message(value):
@@ -11,6 +14,28 @@ def normalize_content_safety_violation_message(value):
     if not candidate:
         return CONTENT_SAFETY_VIOLATION_MESSAGE_DEFAULT
     return candidate[:CONTENT_SAFETY_VIOLATION_MESSAGE_MAX_LENGTH]
+
+
+def normalize_content_safety_block_threshold(value):
+    """Return an admin-configurable Azure Content Safety severity threshold."""
+    try:
+        candidate = int(value)
+    except (TypeError, ValueError):
+        return CONTENT_SAFETY_BLOCK_THRESHOLD_DEFAULT
+
+    return min(
+        CONTENT_SAFETY_BLOCK_THRESHOLD_MAX,
+        max(CONTENT_SAFETY_BLOCK_THRESHOLD_MIN, candidate),
+    )
+
+
+def get_content_safety_block_threshold(settings):
+    """Read the configured severity threshold from the settings document."""
+    if not isinstance(settings, dict):
+        return CONTENT_SAFETY_BLOCK_THRESHOLD_DEFAULT
+    return normalize_content_safety_block_threshold(
+        settings.get('content_safety_block_threshold')
+    )
 
 
 def build_content_safety_violation_message(
