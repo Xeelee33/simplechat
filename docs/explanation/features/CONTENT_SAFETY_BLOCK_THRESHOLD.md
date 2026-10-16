@@ -1,10 +1,10 @@
 # Content Safety Block Threshold
 
-Implemented in version: **0.261.058**
+Implemented in version: **0.261.059**
 
 ## Overview
 
-The Content Safety block threshold lets administrators choose the Azure AI Content Safety prompt severity that blocks a chat request and records a safety violation. The setting is useful when deployments need different safety postures: a youth-focused chatbot can block lower-severity prompts, while investigative or operational teams can allow higher-severity prompts that are expected in their work.
+The Content Safety block thresholds let administrators choose per-category Azure AI Content Safety prompt severities that block a chat request and record a safety violation. The setting is useful when deployments need different safety postures: a youth-focused chatbot can block lower-severity prompts for one or more harm categories, while investigative or operational teams can allow higher-severity prompts that are expected in their work.
 
 ## Dependencies
 
@@ -16,11 +16,13 @@ The Content Safety block threshold lets administrators choose the Azure AI Conte
 
 ### Architecture
 
-- The admin setting is stored in the Cosmos DB settings document as `content_safety_block_threshold`.
-- The default threshold is `4`, preserving the previous block behavior.
-- Accepted values are integers from `2` through `7`.
-- Chat requests are blocked and recorded when any returned Content Safety category severity is greater than or equal to the configured threshold.
-- Blocklist matches continue to block independently of the severity threshold.
+- The admin setting is stored in the Cosmos DB settings document as `content_safety_category_thresholds`.
+- The default threshold is `4` (Medium) for each category, preserving the previous block behavior.
+- Supported categories are Violence, Hate, Sexual, and Self-harm.
+- Accepted threshold values are `2` (Low), `4` (Medium), and `6` (High).
+- Chat requests are blocked and recorded when any returned Content Safety category severity is greater than or equal to that category's configured threshold.
+- Blocklist matches continue to block independently of category thresholds.
+- Higher threshold levels do not override model deployment guardrails.
 
 ### Files
 
@@ -35,15 +37,23 @@ The Content Safety block threshold lets administrators choose the Azure AI Conte
 
 1. Open Admin Settings and select the Content Safety tab.
 2. Enable Content Safety and configure the endpoint or APIM route.
-3. Move the **Prompt Block Severity Threshold** slider to the desired severity from `2` to `7`.
+3. Set the **Prompt Category Block Thresholds** for Violence, Hate, Sexual, and Self-harm.
 4. Save settings.
 
-A lower value blocks more prompts. A higher value blocks only more severe prompts.
+Threshold meanings:
+
+| Label | Value | Behavior |
+| --- | --- | --- |
+| Low | `2` | Block Low, Medium and High |
+| Medium | `4` | Allow Low / Block Medium and High |
+| High | `6` | Allow Low and Medium / Block High |
+
+A lower value blocks more prompts. A higher value blocks only more severe prompts for that category.
 
 ## Testing and validation
 
 - `functional_tests/test_content_safety_violation_message.py` validates threshold normalization and admin-template coverage.
-- `ui_tests/test_admin_content_safety_threshold_ui.py` validates the slider and live badge wiring.
+- `ui_tests/test_admin_content_safety_threshold_ui.py` validates the category sliders and live label/help-text wiring.
 
 ## Known limitations
 

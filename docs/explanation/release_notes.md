@@ -6,16 +6,17 @@ For feature-focused and fix-focused drill-downs by version, see [Features by Ver
 
 #### New Features
 
-*   **Configurable Content Safety Prompt Threshold**
-    *   Administrators can now set the Azure AI Content Safety prompt severity that blocks a chat request and records a safety violation from `2` through `7`.
-    *   The default threshold remains `4`, preserving previous behavior while allowing stricter youth-focused deployments or less restrictive investigative workflows.
-    *   (Ref: Content Safety admin settings, `content_safety_block_threshold`, [Content Safety Block Threshold](features/CONTENT_SAFETY_BLOCK_THRESHOLD.md))
+*   **Configurable Content Safety Prompt Category Thresholds**
+    *   Administrators can now set Azure AI Content Safety prompt thresholds separately for Violence, Hate, Sexual, and Self-harm.
+    *   Each category supports Low (`2`), Medium (`4`), and High (`6`), with Medium as the default to preserve previous behavior.
+    *   Higher threshold levels do not override model deployment guardrails.
+    *   (Ref: Content Safety admin settings, `content_safety_category_thresholds`, [Content Safety Block Threshold](features/CONTENT_SAFETY_BLOCK_THRESHOLD.md))
 
 #### User Interface Enhancements
 
 *   **Admin Settings Slider Contrast**
     *   Admin Settings range sliders now use the same gray tone as an off toggle switch in dark mode, making slider tracks visible against the admin page background.
-    *   This includes the Content Safety prompt severity slider, Main Page Logo Size, and document action capability sliders.
+    *   This includes the Content Safety prompt category threshold sliders, Main Page Logo Size, and document action capability sliders.
     *   (Ref: `content-safety.html`, `branding.html`, `actions.html`, `styles.css`, Admin Settings)
 
 ### **(v0.261.053)**

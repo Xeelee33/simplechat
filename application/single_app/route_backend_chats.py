@@ -119,7 +119,8 @@ from functions_service_health import (
 )
 from functions_content_safety import (
     build_content_safety_violation_message,
-    get_content_safety_block_threshold,
+    get_content_safety_category_label,
+    get_content_safety_category_threshold,
 )
 from functions_settings import *
 from functions_assigned_knowledge import (
@@ -18336,14 +18337,22 @@ def register_route_backend_chats(bp):
                     request_obj = AnalyzeTextOptions(text=user_message)
                     cs_response = content_safety_client.analyze_text(request_obj)
 
-                    max_severity = 0
                     for cat_result in cs_response.categories_analysis:
+                        category_threshold = get_content_safety_category_threshold(
+                            settings,
+                            cat_result.category,
+                        )
                         triggered_categories.append({
                             "category": cat_result.category,
-                            "severity": cat_result.severity
+                            "severity": cat_result.severity,
+                            "threshold": category_threshold,
                         })
-                        if cat_result.severity > max_severity:
-                            max_severity = cat_result.severity
+                        if cat_result.severity >= category_threshold:
+                            blocked = True
+                            category_label = get_content_safety_category_label(cat_result.category)
+                            block_reasons.append(
+                                f"{category_label} severity >= {category_threshold}"
+                            )
 
                     if cs_response.blocklists_match:
                         for match in cs_response.blocklists_match:
@@ -18353,10 +18362,6 @@ def register_route_backend_chats(bp):
                                 "blocklistItemText": match.blocklist_item_text
                             })
 
-                    block_threshold = get_content_safety_block_threshold(settings)
-                    if max_severity >= block_threshold:
-                        blocked = True
-                        block_reasons.append(f"Max severity >= {block_threshold}")
                     if len(blocklist_matches) > 0:
                         blocked = True
                         block_reasons.append("Blocklist match")
@@ -22973,18 +22978,26 @@ def register_route_backend_chats(bp):
                         request_obj = AnalyzeTextOptions(text=user_message)
                         cs_response = content_safety_client.analyze_text(request_obj)
 
-                        max_severity = 0
                         triggered_categories = []
                         blocklist_matches = []
                         block_reasons = []
 
                         for cat_result in cs_response.categories_analysis:
+                            category_threshold = get_content_safety_category_threshold(
+                                settings,
+                                cat_result.category,
+                            )
                             triggered_categories.append({
                                 "category": cat_result.category,
-                                "severity": cat_result.severity
+                                "severity": cat_result.severity,
+                                "threshold": category_threshold,
                             })
-                            if cat_result.severity > max_severity:
-                                max_severity = cat_result.severity
+                            if cat_result.severity >= category_threshold:
+                                blocked = True
+                                category_label = get_content_safety_category_label(cat_result.category)
+                                block_reasons.append(
+                                    f"{category_label} severity >= {category_threshold}"
+                                )
 
                         if cs_response.blocklists_match:
                             for match in cs_response.blocklists_match:
@@ -22994,10 +23007,6 @@ def register_route_backend_chats(bp):
                                     "blocklistItemText": match.blocklist_item_text
                                 })
 
-                        block_threshold = get_content_safety_block_threshold(settings)
-                        if max_severity >= block_threshold:
-                            blocked = True
-                            block_reasons.append(f"Max severity >= {block_threshold}")
                         if len(blocklist_matches) > 0:
                             blocked = True
                             block_reasons.append("Blocklist match")

@@ -5,8 +5,8 @@ UI test for Admin Settings Content Safety prompt threshold controls.
 Version: 0.261.059
 Implemented in: 0.261.058
 
-This test ensures the Content Safety admin pane exposes a severity threshold
-slider, describes its blocking behavior, keeps the live badge synchronized
+This test ensures the Content Safety admin pane exposes category severity
+threshold sliders, describes their blocking behavior, keeps the labels synchronized
 through local SimpleChat JavaScript, and verifies Admin Settings range sliders
 share the dark-mode contrast fix.
 """
@@ -21,32 +21,43 @@ ADMIN_JS = REPO_ROOT / "application" / "single_app" / "static" / "js" / "admin" 
 STYLES_CSS = REPO_ROOT / "application" / "single_app" / "static" / "css" / "styles.css"
 
 
-def test_content_safety_threshold_slider_is_rendered():
-    """Validate the admin threshold slider is present with Azure severity bounds."""
+def test_content_safety_category_threshold_sliders_are_rendered():
+    """Validate category threshold sliders are present with trimmed severity bounds."""
     template = CONTENT_SAFETY_TEMPLATE.read_text(encoding="utf-8")
 
-    assert 'for="content_safety_block_threshold"' in template
-    assert 'id="content_safety_block_threshold_value"' in template
+    assert 'id="content-safety-category-thresholds"' in template
+    assert '<th scope="col">Category</th>' in template
+    assert '<th scope="col">Threshold</th>' in template
+    for category_name in ('Violence', 'Hate', 'Sexual', 'Self-harm'):
+        assert category_name in template
+    for field_name in (
+        'content_safety_threshold_violence',
+        'content_safety_threshold_hate',
+        'content_safety_threshold_sexual',
+        'content_safety_threshold_self_harm',
+    ):
+        assert f'id="{field_name}"' in template
+        assert f'name="{field_name}"' in template
     assert 'type="range"' in template
-    assert 'class="form-range"' in template
-    assert 'id="content_safety_block_threshold"' in template
-    assert 'name="content_safety_block_threshold"' in template
+    assert 'class="form-range content-safety-category-threshold-range"' in template
     assert 'min="2"' in template
-    assert 'max="7"' in template
-    assert 'step="1"' in template
-    assert 'value="{{ settings.content_safety_block_threshold | default(4) }}"' in template
-    assert 'Lower values are more restrictive; default is 4.' in template
+    assert 'max="6"' in template
+    assert 'step="2"' in template
+    assert 'Block Low, Medium and High' in template
+    assert 'Allow Low / Block Medium and High' in template
+    assert 'Allow Low and Medium / Block High' in template
+    assert 'Higher threshold levels don’t override the model deployment guardrails.' in template
 
 
-def test_content_safety_threshold_badge_uses_text_content():
-    """Validate the slider badge is updated without HTML injection sinks."""
+def test_content_safety_threshold_labels_use_text_content():
+    """Validate threshold labels are updated without HTML injection sinks."""
     admin_js = ADMIN_JS.read_text(encoding="utf-8")
 
-    assert "const contentSafetyBlockThreshold = document.getElementById('content_safety_block_threshold');" in admin_js
-    assert "const contentSafetyBlockThresholdValue = document.getElementById('content_safety_block_threshold_value');" in admin_js
-    assert 'contentSafetyBlockThresholdValue.textContent = contentSafetyBlockThreshold.value;' in admin_js
-    assert "contentSafetyBlockThreshold.addEventListener('input', updateContentSafetyBlockThresholdValue);" in admin_js
-    assert "contentSafetyBlockThreshold.addEventListener('change', markFormAsModified);" in admin_js
+    assert "document.querySelectorAll('.content-safety-category-threshold-range').forEach" in admin_js
+    assert 'thresholdLabel.textContent = thresholdCopy.label;' in admin_js
+    assert 'thresholdHelp.textContent = thresholdCopy.help;' in admin_js
+    assert "thresholdSlider.addEventListener('input', updateContentSafetyCategoryThreshold);" in admin_js
+    assert "thresholdSlider.addEventListener('change', markFormAsModified);" in admin_js
 
 
 def test_admin_settings_range_sliders_use_switch_off_gray_track():
