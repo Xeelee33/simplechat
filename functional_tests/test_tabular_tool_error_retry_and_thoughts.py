@@ -2,9 +2,10 @@
 #!/usr/bin/env python3
 """
 Functional test for tabular tool-error retry and thought visibility fix.
-Version: 0.261.057
+Version: 0.261.061
 Implemented in: 0.239.037
 Updated in: 0.261.057 (required-tool continuation fix; version bump deferred)
+Updated in: 0.261.061 (isolated helper tests from live Cosmos configuration)
 
 This test ensures that analytical tabular tool calls returning JSON error
 payloads are treated as failed attempts, are retried instead of being accepted
@@ -63,6 +64,29 @@ def load_tabular_route_helpers():
     module = ast.Module(body=selected_nodes, type_ignores=[])
     namespace = {'json': json}
     exec(compile(module, ROUTE_FILE, 'exec'), namespace)
+    namespace['get_tabular_discovery_function_names'] = lambda: (
+        'list_tabular_files',
+        'describe_tabular_file',
+    )
+    namespace['get_tabular_analysis_function_names'] = lambda: (
+        'lookup_value',
+        'get_distinct_values',
+        'count_rows',
+        'aggregate_column',
+        'filter_rows',
+        'search_rows',
+        'query_tabular_data',
+        'filter_rows_by_related_values',
+        'count_rows_by_related_values',
+        'group_by_aggregate',
+        'group_by_datetime_component',
+    )
+    namespace['get_tabular_thought_excluded_parameter_names'] = lambda: (
+        'user_id',
+        'conversation_id',
+        'group_id',
+        'public_workspace_id',
+    )
     return namespace, route_content
 
 
