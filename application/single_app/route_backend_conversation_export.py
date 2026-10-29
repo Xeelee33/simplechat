@@ -261,18 +261,21 @@ def register_route_backend_conversation_export(bp):
 
         message_id = str(data.get('message_id', '') or '').strip()
         conversation_id = str(data.get('conversation_id', '') or '').strip()
+        artifact_message_id = str(data.get('artifact_message_id', '') or '').strip()
 
         if not message_id or not conversation_id:
             return jsonify({'error': 'message_id and conversation_id are required'}), 400
 
         try:
-            message = _load_export_message_for_user(
+            message = _load_word_export_message_for_user(
                 user_id=user_id,
                 conversation_id=conversation_id,
-                message_id=message_id
+                message_id=message_id,
+                artifact_message_id=artifact_message_id,
             )
-            message_content_override = _get_message_export_content_override(data)
-            message = _apply_message_export_content_override(message, message_content_override)
+            if not artifact_message_id:
+                message_content_override = _get_message_export_content_override(data)
+                message = _apply_message_export_content_override(message, message_content_override)
 
             document_bytes = _message_to_docx_bytes(message)
             timestamp_str = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
@@ -2051,6 +2054,37 @@ def _load_powerpoint_export_message_for_user(
     message_id: str,
     artifact_message_id: str = '',
 ) -> Dict[str, Any]:
+    return _load_generated_markdown_artifact_export_message_for_user(
+        user_id=user_id,
+        conversation_id=conversation_id,
+        message_id=message_id,
+        artifact_message_id=artifact_message_id,
+        export_name='PowerPoint',
+    )
+
+
+def _load_word_export_message_for_user(
+    user_id: str,
+    conversation_id: str,
+    message_id: str,
+    artifact_message_id: str = '',
+) -> Dict[str, Any]:
+    return _load_generated_markdown_artifact_export_message_for_user(
+        user_id=user_id,
+        conversation_id=conversation_id,
+        message_id=message_id,
+        artifact_message_id=artifact_message_id,
+        export_name='Word',
+    )
+
+
+def _load_generated_markdown_artifact_export_message_for_user(
+    user_id: str,
+    conversation_id: str,
+    message_id: str,
+    artifact_message_id: str,
+    export_name: str,
+) -> Dict[str, Any]:
     message = _load_export_message_for_user(user_id, conversation_id, message_id)
     normalized_artifact_message_id = str(artifact_message_id or '').strip()
     if not normalized_artifact_message_id:
@@ -2060,6 +2094,7 @@ def _load_powerpoint_export_message_for_user(
         user_id=user_id,
         conversation_id=conversation_id,
         artifact_message_id=normalized_artifact_message_id,
+        export_name=export_name,
     )
     artifact_bytes = download_blob_content(
         artifact_message.get('blob_container'),
@@ -2073,9 +2108,9 @@ def _load_powerpoint_export_message_for_user(
     artifact_filename = str(artifact_message.get('filename') or 'generated-artifact.md').strip()
     metadata = dict(message.get('metadata') or {})
     metadata.update({
-        'powerpoint_export_source': 'generated_markdown_artifact',
-        'powerpoint_export_artifact_message_id': normalized_artifact_message_id,
-        'powerpoint_export_artifact_filename': artifact_filename,
+        f'{export_name.lower()}_export_source': 'generated_markdown_artifact',
+        f'{export_name.lower()}_export_artifact_message_id': normalized_artifact_message_id,
+        f'{export_name.lower()}_export_artifact_filename': artifact_filename,
     })
 
     artifact_backed_message = dict(message)
@@ -2092,6 +2127,7 @@ def _load_generated_markdown_artifact_for_user(
     user_id: str,
     conversation_id: str,
     artifact_message_id: str,
+    export_name: str = 'PowerPoint',
 ) -> Dict[str, Any]:
     artifact_message = _load_export_message_for_user(
         user_id=user_id,
@@ -2106,7 +2142,7 @@ def _load_generated_markdown_artifact_for_user(
         raise LookupError('Generated Markdown artifact not found')
 
     if artifact_format not in {'md', 'markdown'} and not artifact_filename.endswith(('.md', '.markdown')):
-        raise ValueError('Only generated Markdown artifacts can be exported as PowerPoint')
+        raise ValueError(f'Only generated Markdown artifacts can be exported as {export_name}')
 
     if str(artifact_message.get('file_content_source') or '').strip().lower() != 'blob':
         raise LookupError('Generated Markdown artifact content is unavailable')

@@ -4887,18 +4887,19 @@ function renderReplyQuoteHtml(fullMessageObject = null) {
     }
   }
 
-  async function exportGeneratedMarkdownArtifactAsPowerPoint(outputMetadata, exportButton) {
+  async function exportGeneratedMarkdownArtifactAsOfficeDocument(outputMetadata, exportButton, exportType) {
     const normalizedArtifactMessageId = String(outputMetadata?.artifact_message_id || '').trim();
     const normalizedConversationId = String(outputMetadata?.conversation_id || window.currentConversationId || '').trim();
     const parentMessageDiv = exportButton?.closest('.message');
     const parentMessageId = String(parentMessageDiv?.getAttribute('data-message-id') || '').trim();
+    const exportLabel = exportType === 'word' ? 'Word' : 'PowerPoint';
 
     if (!normalizedArtifactMessageId || !normalizedConversationId || !parentMessageId) {
-      showToast('Generated Markdown artifact is missing PowerPoint export metadata.', 'warning');
+      showToast(`Generated Markdown artifact is missing ${exportLabel} export metadata.`, 'warning');
       return;
     }
 
-    const originalButtonText = exportButton?.textContent || 'Create PowerPoint';
+    const originalButtonText = exportButton?.textContent || `Create ${exportLabel}`;
     if (exportButton) {
       exportButton.disabled = true;
       exportButton.textContent = 'Creating...';
@@ -4906,21 +4907,32 @@ function renderReplyQuoteHtml(fullMessageObject = null) {
 
     try {
       const module = await import('./chat-message-export.js');
-      if (typeof module.exportMessageAsPowerPoint === 'function') {
-        await module.exportMessageAsPowerPoint(parentMessageDiv, parentMessageId, 'assistant', {
+      const exportFunction = exportType === 'word'
+        ? module.exportMessageAsWord
+        : module.exportMessageAsPowerPoint;
+      if (typeof exportFunction === 'function') {
+        await exportFunction(parentMessageDiv, parentMessageId, 'assistant', {
           artifactMessageId: normalizedArtifactMessageId,
           conversationId: normalizedConversationId,
         });
       }
     } catch (error) {
-      console.error('Error exporting generated Markdown artifact to PowerPoint:', error);
-      showToast('Failed to export the generated Markdown artifact to PowerPoint.', 'danger');
+      console.error(`Error exporting generated Markdown artifact to ${exportLabel}:`, error);
+      showToast(`Failed to export the generated Markdown artifact to ${exportLabel}.`, 'danger');
     } finally {
       if (exportButton) {
         exportButton.disabled = false;
         exportButton.textContent = originalButtonText;
       }
     }
+  }
+
+  async function exportGeneratedMarkdownArtifactAsPowerPoint(outputMetadata, exportButton) {
+    await exportGeneratedMarkdownArtifactAsOfficeDocument(outputMetadata, exportButton, 'powerpoint');
+  }
+
+  async function exportGeneratedMarkdownArtifactAsWord(outputMetadata, exportButton) {
+    await exportGeneratedMarkdownArtifactAsOfficeDocument(outputMetadata, exportButton, 'word');
   }
 
   function updateBackgroundGeneratedOutputStatusCard(statusElements, outputMetadata) {
@@ -5624,6 +5636,24 @@ function renderReplyQuoteHtml(fullMessageObject = null) {
           exportGeneratedMarkdownArtifactAsPowerPoint(outputMetadata, exportPowerPointButton);
         });
         actions.appendChild(exportPowerPointButton);
+
+        const exportWordButton = document.createElement('button');
+        exportWordButton.type = 'button';
+        exportWordButton.className = 'btn btn-sm btn-outline-primary generated-artifact-export-word-btn';
+        exportWordButton.textContent = 'Create Word';
+        exportWordButton.setAttribute('aria-label', `Create Word document from ${fileName}`);
+        exportWordButton.dataset.artifactMessageId = normalizedArtifactMessageId;
+        exportWordButton.dataset.conversationId = normalizedConversationId;
+        exportWordButton.addEventListener('click', () => {
+          recordGeneratedArtifactSetUiEvent('member_word_action', {
+            runId: outputMetadata?.run_id || outputMetadata?.export_run_id,
+            status: outputMetadata?.status,
+            memberCount: 1,
+            formats: [outputFormat],
+          });
+          exportGeneratedMarkdownArtifactAsWord(outputMetadata, exportWordButton);
+        });
+        actions.appendChild(exportWordButton);
       }
 
       const viewButton = document.createElement('button');

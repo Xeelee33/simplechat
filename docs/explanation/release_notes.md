@@ -2,6 +2,15 @@
 
 For feature-focused and fix-focused drill-downs by version, see [Features by Version](https://github.com/microsoft/simplechat/tree/main/docs/explanation/features) and [Fixes by Version](https://github.com/microsoft/simplechat/tree/main/docs/explanation/fixes).
 
+### **(v0.261.062)**
+
+#### User Interface Enhancements
+
+*   **Create Word From Generated Markdown Analysis**
+    *   Generated Markdown analysis cards now include **Create Word** between **Create PowerPoint** and **View MD**.
+    *   The Word export uses the full generated Markdown artifact rather than the shorter chat response.
+    *   (Ref: `chat-messages.js`, `chat-message-export.js`, `route_backend_conversation_export.py`)
+
 ### **(v0.261.061)**
 
 #### New Features
@@ -18,13 +27,10 @@ For feature-focused and fix-focused drill-downs by version, see [Features by Ver
     *   Workflows and agent instruction drafts no longer send the selected metadata extraction deployment to the legacy global GPT or APIM endpoint when the model is hosted on a configured AI Foundry or multi-endpoint connection.
     *   (Ref: `resolve_metadata_extraction_client()`, `route_backend_agents.py`, `route_backend_workflows.py`, [Workflow Instruction Model Endpoint Fix](fixes/WORKFLOW_INSTRUCTION_MODEL_ENDPOINT_FIX.md))
 
-<<<<<<< HEAD
-=======
 *   **Tabular Analysis Required-Tool Choice Continuation Fix**
     *   Tabular analysis rounds now switch tool-choice behavior from `required` to `auto` after the initial tool invocation while preserving function allowlists and invocation limits, allowing the model to either request follow-up tools or return its final answer.
     *   (Ref: `allow_tabular_completion_after_initial_tools()`, `route_backend_chats.py`, `test_tabular_tool_error_retry_and_thoughts.py`)
 
->>>>>>> Development
 ### **(v0.261.060)**
 
 #### Bug Fixes

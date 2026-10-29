@@ -2,8 +2,8 @@
 # test_per_message_export.py
 """
 Functional tests for the per-message export feature and export route regressions.
-Version: 0.250.215
-Implemented in: 0.241.019; Updated in: 0.250.215
+Version: 0.261.062
+Implemented in: 0.241.019; Updated in: 0.250.215; generated Markdown Word artifact export in: 0.261.062
 
 Covers:
  - Happy path: Word document built successfully from a valid message.
@@ -886,6 +886,36 @@ def test_per_message_export_uses_content_override_contract():
     return True
 
 
+def test_generated_markdown_artifact_word_export_contract():
+    """Generated Markdown artifact cards must export their full content as Word documents."""
+    print("🔍 Testing generated Markdown artifact Word export contract...")
+
+    repo_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
+    route_file = os.path.join(repo_root, 'application', 'single_app', 'route_backend_conversation_export.py')
+    export_file = os.path.join(repo_root, 'application', 'single_app', 'static', 'js', 'chat', 'chat-message-export.js')
+    messages_file = os.path.join(repo_root, 'application', 'single_app', 'static', 'js', 'chat', 'chat-messages.js')
+
+    with open(route_file, 'r', encoding='utf-8') as handle:
+        route_source = handle.read()
+    with open(export_file, 'r', encoding='utf-8') as handle:
+        export_source = handle.read()
+    with open(messages_file, 'r', encoding='utf-8') as handle:
+        messages_source = handle.read()
+
+    assert 'def _load_word_export_message_for_user(' in route_source
+    assert "export_name='Word'" in route_source
+    assert 'message = _load_word_export_message_for_user(' in route_source
+    assert 'artifact_message_id = str(data.get(\'artifact_message_id\', \'\') or \'\').strip()' in route_source
+    assert 'export async function exportMessageAsWord(messageDiv, messageId, role, options = {})' in export_source
+    assert 'requestBody.artifact_message_id = artifactSource.artifactMessageId;' in export_source
+    assert 'exportGeneratedMarkdownArtifactAsWord' in messages_source
+    assert 'generated-artifact-export-word-btn' in messages_source
+    assert messages_source.index("exportWordButton.textContent = 'Create Word';") < messages_source.index("viewButton.textContent = 'View MD';")
+
+    print("✅ test_generated_markdown_artifact_word_export_contract passed!")
+    return True
+
+
 def test_auth_failure_unauthenticated():
     """Auth failure: an unauthenticated caller (no user_id) should get 401."""
     print("🔍 Testing auth failure – unauthenticated request...")
@@ -997,6 +1027,7 @@ if __name__ == "__main__":
         test_export_email_route_definition_present,
         test_email_export_frontend_uses_mailto_draft_endpoint,
         test_per_message_export_uses_content_override_contract,
+        test_generated_markdown_artifact_word_export_contract,
         test_auth_failure_unauthenticated,
         test_ownership_failure_wrong_user,
         test_ownership_failure_missing_conversation,

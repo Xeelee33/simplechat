@@ -1,9 +1,9 @@
 # test_chat_generated_tabular_output_card.py
 """
 UI test for chat generated tabular output cards.
-Version: 0.250.152
+Version: 0.261.062
 Implemented in: 0.241.033
-Updated in: 0.241.096; simplified completed artifact cards and bounded View modal in 0.250.151; foreground JSON/XML completed cards in 0.250.152
+Updated in: 0.241.096; simplified completed artifact cards and bounded View modal in 0.250.151; foreground JSON/XML completed cards in 0.250.152; generated Markdown Word export in 0.261.062
 
 This test ensures assistant replies with generic generated analysis artifact
 metadata render a reusable export card, preserve untrusted values as text,
@@ -13,7 +13,8 @@ clicks the card buttons without introducing page-level JavaScript errors. It
 also validates Markdown artifact previews render as sanitized Markdown instead
 of raw source text and that generated Markdown files can be viewed in a rendered
 modal from the artifact card. It also ensures generated Markdown artifact cards
-offer direct PowerPoint export and that workspace promotion opens a confirmation
+offer direct PowerPoint and Word export, with Create Word positioned between
+Create PowerPoint and View MD, and that workspace promotion opens a confirmation
 or target-selection modal before submitting.
 """
 
@@ -608,6 +609,7 @@ def test_chat_generated_analysis_markdown_preview_renders_markdown(playwright):
     }
     page_errors = []
     view_requests = []
+    word_export_requests = []
 
     browser = playwright.chromium.launch()
     context = browser.new_context(
@@ -623,6 +625,20 @@ def test_chat_generated_analysis_markdown_preview_renders_markdown(playwright):
         lambda route: _fulfill_json(route, {"selected_agent": None, "settings": {"enable_agents": False}}),
     )
     page.route("**/api/get_conversations", lambda route: _fulfill_json(route, {"conversations": []}))
+    page.route(
+        "**/api/message/export-word",
+        lambda route: (
+            word_export_requests.append(json.loads(route.request.post_data or "{}")),
+            route.fulfill(
+                status=200,
+                headers={
+                    "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    "Content-Disposition": 'attachment; filename="analysis.docx"',
+                },
+                body=b"mock-word-download",
+            ),
+        ),
+    )
     page.route(
         "**/api/chat_artifacts/download?conversation_id=generated-markdown-preview-test&message_id=generated-markdown-123",
         lambda route: (
@@ -694,8 +710,28 @@ def test_chat_generated_analysis_markdown_preview_renders_markdown(playwright):
         expect(preview_block.locator('[onerror]')).to_have_count(0)
 
         view_button = card.get_by_role('button', name='View MD')
+        word_button = card.get_by_role('button', name='Create Word')
         expect(view_button).to_be_visible()
         expect(card.get_by_role('button', name='Create PowerPoint')).to_be_visible()
+        expect(word_button).to_be_visible()
+        assert card.locator('.d-flex.flex-wrap button').all_text_contents() == [
+            'Download MD',
+            'Create PowerPoint',
+            'Create Word',
+            'View MD',
+            'Add to Workspace',
+        ]
+
+        with page.expect_request("**/api/message/export-word"):
+            word_button.click()
+
+        assert word_export_requests == [
+            {
+                'message_id': 'assistant-generated-markdown',
+                'conversation_id': 'generated-markdown-preview-test',
+                'artifact_message_id': 'generated-markdown-123',
+            }
+        ]
 
         with page.expect_response(
             "**/api/chat_artifacts/download?conversation_id=generated-markdown-preview-test&message_id=generated-markdown-123"

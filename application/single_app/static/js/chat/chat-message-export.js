@@ -226,18 +226,30 @@ export async function exportMessageAsAudio(messageDiv, messageId, role) {
  * Export a single message as a Word (.docx) file by calling the backend
  * endpoint which uses python-docx to generate the document.
  */
-export async function exportMessageAsWord(messageDiv, messageId, role) {
-    const conversationId = window.currentConversationId;
+export async function exportMessageAsWord(messageDiv, messageId, role, options = {}) {
+    const artifactSource = options.artifactMessageId
+        ? {
+            artifactMessageId: String(options.artifactMessageId || '').trim(),
+            conversationId: String(options.conversationId || window.currentConversationId || '').trim(),
+        }
+        : null;
+    const conversationId = artifactSource?.conversationId || window.currentConversationId;
     if (!conversationId || !messageId) {
         showToast('Cannot export — no active conversation or message.', 'warning');
         return;
     }
 
     try {
+        const requestBody = buildMessageExportRequestBody(messageDiv, messageId, conversationId, role);
+        if (artifactSource?.artifactMessageId) {
+            requestBody.artifact_message_id = artifactSource.artifactMessageId;
+            delete requestBody.message_content_override;
+        }
+
         const response = await fetch('/api/message/export-word', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(buildMessageExportRequestBody(messageDiv, messageId, conversationId, role))
+            body: JSON.stringify(requestBody)
         });
 
         if (!response.ok) {
@@ -250,7 +262,12 @@ export async function exportMessageAsWord(messageDiv, messageId, role) {
         const blob = await response.blob();
         const filename = `message_export_${filenameTimestamp()}.docx`;
         downloadBlob(blob, filename);
-        showToast('Message exported as Word document.', 'success');
+        showToast(
+            artifactSource?.artifactMessageId
+                ? 'Markdown artifact exported as Word document.'
+                : 'Message exported as Word document.',
+            'success'
+        );
     } catch (err) {
         console.error('Error exporting message to Word:', err);
         showToast('Failed to export message to Word.', 'danger');

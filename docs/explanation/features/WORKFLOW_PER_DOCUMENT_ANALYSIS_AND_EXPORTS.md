@@ -2,8 +2,10 @@
 
 Implemented in version: **0.241.182**
 
+Updated in version: **0.261.062**
+
 Related version update:
-- `application/single_app/config.py` reports version `0.241.182`.
+- `application/single_app/config.py` reports version `0.261.062`.
 
 ## Overview
 
@@ -26,6 +28,7 @@ Architecture overview:
 - `per_document` makes the runner prepare a one-document workflow for each selected document, reuse the existing Analyze execution path, and combine the replies, coverage, citations, generated artifacts, tabular outputs, token usage, and alert targets.
 - Per-document prompts include runtime guidance telling the model or agent which document is being processed and that generated artifacts should be specific to that document.
 - SimpleChat generated document actions expose `upload_word_document` and `upload_powerpoint_document` alongside the existing Markdown upload action.
+- Generated Markdown analysis artifact cards provide **Create PowerPoint**, **Create Word**, **View MD**, and workspace-promotion actions. The Word action uses the artifact source rather than the shorter assistant reply.
 - Group workflow SimpleChat actions default generated uploads to the current group workspace by resolving `workspace_scope="current"` through the plugin manifest `default_group_id`.
 - The existing group upload path still enforces current group access checks before saving artifacts.
 

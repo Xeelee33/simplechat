@@ -154,6 +154,7 @@ def _load_powerpoint_helpers():
         '_normalize_export_prompt',
         '_sanitize_powerpoint_source_content',
         '_load_powerpoint_export_message_for_user',
+        '_load_generated_markdown_artifact_export_message_for_user',
         '_load_generated_markdown_artifact_for_user',
         '_parse_powerpoint_requested_slide_count',
         '_resolve_powerpoint_slide_count',
