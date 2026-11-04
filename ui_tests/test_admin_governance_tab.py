@@ -2,8 +2,8 @@
 """
 UI test for admin governance tab rendering and API wiring.
 
-Version: 0.261.002
-Implemented in: 0.241.009; 0.241.025; 0.242.012; 0.242.013; 0.242.014; 0.242.018; 0.242.019; 0.250.204; 0.250.205; 0.250.206; 0.250.207; 0.250.208; 0.261.002
+Version: 0.261.063
+Implemented in: 0.241.009; 0.241.025; 0.242.012; 0.242.013; 0.242.014; 0.242.018; 0.242.019; 0.250.204; 0.250.205; 0.250.206; 0.250.207; 0.250.208; 0.261.002; 0.261.063
 
 This test ensures the Governance tab is present in admin settings, the
 sidebar navigation exposes the same destination, feature policy fetch/save
@@ -38,6 +38,7 @@ def test_admin_governance_tab_and_api_wiring():
     user_info_requests = []
     agent_lookup_requests = []
     action_lookup_requests = []
+    action_type_lookup_requests = []
 
     feature_payload = {
         "features": [
@@ -169,6 +170,20 @@ def test_admin_governance_tab_and_api_wiring():
             ]),
         )
 
+    def fulfill_admin_action_type_lookup(route):
+        action_type_lookup_requests.append(route.request.url)
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps([
+                {
+                    "type": "long_personal_action_type",
+                    "display": "Long Personal Action Type",
+                    "description": "A deliberately long action type description that must remain available on hover.",
+                }
+            ]),
+        )
+
     with playwright_sync_api.sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         context = browser.new_context(
@@ -187,6 +202,7 @@ def test_admin_governance_tab_and_api_wiring():
             page.route("**/api/groups/discover**", fulfill_empty_group_discovery)
             page.route("**/api/admin/agents", fulfill_admin_agents_lookup)
             page.route("**/api/admin/plugins", fulfill_admin_plugins_lookup)
+            page.route("**/api/admin/plugins/types", fulfill_admin_action_type_lookup)
 
             page.goto(f"{BASE_URL}/admin/settings", wait_until="domcontentloaded")
 
@@ -267,6 +283,13 @@ def test_admin_governance_tab_and_api_wiring():
 
             page.get_by_role("button", name="New Policy").click()
             page.wait_for_selector("#governance-item-policy-editor-modal.show")
+            page.locator("#governance-item-entity-type").select_option("personal_action_type")
+            page.wait_for_selector("#governance-item-id option[value='long_personal_action_type']")
+            long_action_option = page.locator("#governance-item-id option[value='long_personal_action_type']")
+            long_action_label = "Long Personal Action Type (A deliberately long action type description that must remain available on hover.)"
+            assert long_action_option.inner_text() == f"{long_action_label[:49]}…"
+            assert long_action_option.get_attribute("title") == long_action_label
+            page.locator("#governance-item-entity-type").select_option("global_agent")
             page.wait_for_selector("#governance-item-id option[value='global-agent-2']")
             page.locator("#governance-item-id").select_option("global-agent-2")
             page.locator("#governance-item-allow-all").uncheck()
@@ -306,6 +329,7 @@ def test_admin_governance_tab_and_api_wiring():
             assert feature_put_requests, "Expected governance feature policies PUT request"
             assert item_put_requests, "Expected governance item policy PUT request"
             assert agent_lookup_requests, "Expected global agent lookup GET request"
+            assert action_type_lookup_requests, "Expected action type lookup GET request"
             assert any("denied_groups" in request for request in feature_put_requests), (
                 "Expected feature policy save payloads to include denied groups"
             )

@@ -25,6 +25,8 @@ const GOVERNANCE_ITEM_ENTITY_LABELS = {
     inbound_mcp_source: 'Inbound MCP Source',
 };
 
+const GOVERNANCE_ITEM_LOOKUP_LABEL_MAX_LENGTH = 50;
+
 const GOVERNANCE_ITEM_LOOKUP_HINTS = {
     global_endpoint: 'Select an endpoint configured in Admin Settings.',
     global_agent: 'Select a global agent available for delegation.',
@@ -413,12 +415,20 @@ function normalizeGovernanceLookupOption(option, fallbackLabelPrefix) {
     };
 }
 
+function truncateGovernanceItemLookupLabel(label) {
+    if (label.length <= GOVERNANCE_ITEM_LOOKUP_LABEL_MAX_LENGTH) {
+        return label;
+    }
+    return `${label.slice(0, GOVERNANCE_ITEM_LOOKUP_LABEL_MAX_LENGTH - 1)}…`;
+}
+
 function buildGovernanceItemLookupOption(option) {
     const label = option.subtitle ? `${option.label} (${option.subtitle})` : option.label;
     const element = document.createElement('option');
     element.value = option.value;
     element.dataset.resourceLabel = option.label;
-    element.textContent = label;
+    element.title = label;
+    element.textContent = truncateGovernanceItemLookupLabel(label);
     return element;
 }
 

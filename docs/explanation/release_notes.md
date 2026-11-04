@@ -2,6 +2,15 @@
 
 For feature-focused and fix-focused drill-downs by version, see [Features by Version](https://github.com/microsoft/simplechat/tree/main/docs/explanation/features) and [Fixes by Version](https://github.com/microsoft/simplechat/tree/main/docs/explanation/fixes).
 
+### **(v0.261.063)**
+
+#### Bug Fixes
+
+*   **Governance Delegated Item Dropdown Labels**
+    *   Long delegated action-type descriptions in Governance > Policies are now shortened to 50 characters, preventing the native item picker from exceeding the available width.
+    *   Hovering a shortened option shows its full text.
+    *   (Ref: `admin_governance.js`, [Governance Delegated Item Label Truncation Fix](fixes/GOVERNANCE_DELEGATED_ITEM_LABEL_TRUNCATION_FIX.md))
+
 ### **(v0.261.062)**
 
 #### User Interface Enhancements
