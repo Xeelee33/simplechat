@@ -2,6 +2,8 @@
 
 Fixed in version: **0.261.063**
 
+Updated in version: **0.261.064**
+
 ## Issue Description
 
 The **Select an item** menu in Admin Settings > Governance > Policies displayed complete delegated action-type descriptions. Long action descriptions made native browser dropdown menus exceed the available width, leaving much of the text inaccessible.
@@ -23,7 +25,8 @@ Code changes summary:
 - Limits delegated-item option labels to 50 characters, including a trailing ellipsis when truncation is needed.
 - Preserves the complete label in the option's native hover tooltip.
 - Retains the existing full resource label for the policy editor and saved policy data.
-- Updates the application version to `0.261.063`.
+- Sorts dropdown options alphabetically by their complete label before rendering their truncated text.
+- Updates the application version to `0.261.064`.
 
 ## Validation
 

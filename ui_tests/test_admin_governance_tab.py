@@ -2,8 +2,8 @@
 """
 UI test for admin governance tab rendering and API wiring.
 
-Version: 0.261.063
-Implemented in: 0.241.009; 0.241.025; 0.242.012; 0.242.013; 0.242.014; 0.242.018; 0.242.019; 0.250.204; 0.250.205; 0.250.206; 0.250.207; 0.250.208; 0.261.002; 0.261.063
+Version: 0.261.064
+Implemented in: 0.241.009; 0.241.025; 0.242.012; 0.242.013; 0.242.014; 0.242.018; 0.242.019; 0.250.204; 0.250.205; 0.250.206; 0.250.207; 0.250.208; 0.261.002; 0.261.063; 0.261.064
 
 This test ensures the Governance tab is present in admin settings, the
 sidebar navigation exposes the same destination, feature policy fetch/save
@@ -180,6 +180,11 @@ def test_admin_governance_tab_and_api_wiring():
                     "type": "long_personal_action_type",
                     "display": "Long Personal Action Type",
                     "description": "A deliberately long action type description that must remain available on hover.",
+                },
+                {
+                    "type": "alpha_personal_action_type",
+                    "display": "Alpha Personal Action Type",
+                    "description": "An alphabetically first action type.",
                 }
             ]),
         )
@@ -285,6 +290,10 @@ def test_admin_governance_tab_and_api_wiring():
             page.wait_for_selector("#governance-item-policy-editor-modal.show")
             page.locator("#governance-item-entity-type").select_option("personal_action_type")
             page.wait_for_selector("#governance-item-id option[value='long_personal_action_type']")
+            action_type_values = page.locator("#governance-item-id option:not([value=''])").evaluate_all(
+                "options => options.map((option) => option.value)"
+            )
+            assert action_type_values == ["alpha_personal_action_type", "long_personal_action_type"]
             long_action_option = page.locator("#governance-item-id option[value='long_personal_action_type']")
             long_action_label = "Long Personal Action Type (A deliberately long action type description that must remain available on hover.)"
             assert long_action_option.inner_text() == f"{long_action_label[:49]}…"

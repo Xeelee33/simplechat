@@ -422,8 +422,12 @@ function truncateGovernanceItemLookupLabel(label) {
     return `${label.slice(0, GOVERNANCE_ITEM_LOOKUP_LABEL_MAX_LENGTH - 1)}…`;
 }
 
+function buildGovernanceItemLookupLabel(option) {
+    return option.subtitle ? `${option.label} (${option.subtitle})` : option.label;
+}
+
 function buildGovernanceItemLookupOption(option) {
-    const label = option.subtitle ? `${option.label} (${option.subtitle})` : option.label;
+    const label = buildGovernanceItemLookupLabel(option);
     const element = document.createElement('option');
     element.value = option.value;
     element.dataset.resourceLabel = option.label;
@@ -631,12 +635,19 @@ function renderGovernanceItemLookupOptions(entityType, preferredValue = '') {
     const options = Array.isArray(governanceItemLookupState[entityType]) ? governanceItemLookupState[entityType] : [];
     const currentValue = String(preferredValue || '').trim();
     const filterValue = String(getItemLookupFilterInput()?.value || '').trim().toLowerCase();
-    const visibleOptions = filterValue
+    const visibleOptions = (filterValue
         ? options.filter((option) => {
             const optionText = `${option.value || ''} ${option.label || ''} ${option.subtitle || ''}`.toLowerCase();
             return optionText.includes(filterValue);
         })
-        : options;
+        : [...options])
+        .sort((firstOption, secondOption) => {
+            return buildGovernanceItemLookupLabel(firstOption).localeCompare(
+                buildGovernanceItemLookupLabel(secondOption),
+                undefined,
+                { sensitivity: 'base' },
+            );
+        });
 
     itemIdInput.innerHTML = '';
 
