@@ -1,13 +1,14 @@
 # test_agent_modal_model_endpoint_filtering.py
 """
 Functional test for agent modal model endpoint filtering.
-Version: 0.261.048
-Implemented in: 0.236.056; updated in 0.261.048
+Version: 0.261.065
+Implemented in: 0.236.056; updated in 0.261.065
 
 This test ensures the agent modal dropdown includes non-AOAI providers for local
-agents, normalizes model IDs/display names when building the model list, and
-does not fall back to legacy global model settings when governed multi-endpoint
-settings return no available endpoints.
+agents, defaults new local agents to the chat default model, orders options
+alphanumerically, normalizes model IDs/display names when building the model
+list, and does not fall back to legacy global model settings when governed
+multi-endpoint settings return no available endpoints.
 """
 
 import os
@@ -37,22 +38,40 @@ def test_agent_modal_model_endpoint_filtering():
         with open(js_path, "r", encoding="utf-8") as handle:
             content = handle.read()
 
+        agent_route_path = os.path.join(
+            repo_root,
+            "application",
+            "single_app",
+            "route_backend_agents.py",
+        )
+        with open(agent_route_path, "r", encoding="utf-8") as handle:
+            agent_route_content = handle.read()
+
         required_snippets = [
             "agentType === 'aifoundry' && provider !== 'aifoundry'",
             "const modelId = model.id",
             "const displayName = model.displayName",
             "display_name: displayName",
             "if (multiEndpointEnabled) {",
+            "const defaultModelSelection = settings?.default_model_selection;",
+            "endpoint_id: defaultModelSelection.endpoint_id",
+            "model_id: defaultModelSelection.model_id",
+            "const sortedModels = [...models].sort",
+            "localeCompare(rightLabel, undefined, { numeric: true, sensitivity: 'base' })",
             "return { models, selectedModel };\n\t}\n\tif (apimEnabled)",
         ]
 
         missing = [snippet for snippet in required_snippets if snippet not in content]
         if missing:
             raise AssertionError(
-                f"Missing expected filtering/normalization snippets: {', '.join(missing)}"
+                f"Missing expected filtering/default/sorting snippets: {', '.join(missing)}"
             )
 
-        print("✅ Agent modal model endpoint filtering logic present.")
+        assert '"default_model_selection": settings.get("default_model_selection", {})' in agent_route_content, (
+            "Expected agent settings API to provide the chat default model selection."
+        )
+
+        print("✅ Agent modal model filtering, default selection, and sorting logic present.")
         return True
 
     except Exception as exc:

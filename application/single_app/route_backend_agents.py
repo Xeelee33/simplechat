@@ -2192,5 +2192,6 @@ def get_global_agent_settings(include_admin_extras=False, user_id=None, group_id
         "allow_group_new_foundry_agents": settings.get("allow_group_new_foundry_agents", False),
         "allow_personal_new_foundry_agents": settings.get("allow_personal_new_foundry_agents", False),
         "enable_multi_model_endpoints": effective_multi_flag,
+        "default_model_selection": settings.get("default_model_selection", {}),
         "model_endpoints": combined_endpoints,
     })

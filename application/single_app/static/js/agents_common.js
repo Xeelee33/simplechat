@@ -727,7 +727,20 @@ export function getAvailableModels({ apimEnabled, settings, agent }) {
 				});
 			});
 		});
-		selectedModel = agent && (agent.model_id || agent.azure_openai_gpt_deployment) ? (agent.model_id || agent.azure_openai_gpt_deployment) : null;
+        if (agent && (agent.model_id || agent.azure_openai_gpt_deployment)) {
+            selectedModel = {
+                endpoint_id: agent.model_endpoint_id || '',
+                model_id: agent.model_id || agent.azure_openai_gpt_deployment
+            };
+        } else {
+            const defaultModelSelection = settings?.default_model_selection;
+            if (defaultModelSelection?.endpoint_id && defaultModelSelection?.model_id) {
+                selectedModel = {
+                    endpoint_id: defaultModelSelection.endpoint_id,
+                    model_id: defaultModelSelection.model_id
+                };
+            }
+        }
 		return { models, selectedModel };
 	}
 	if (apimEnabled) {
@@ -811,7 +824,7 @@ export function toggleAdvancedUI(isEnabled, modalElements) {
  * Populates the global model dropdown
  * @param {HTMLElement} selectEl
  * @param {Array} models
- * @param {string} selectedModel
+ * @param {string|Object} selectedModel
  */
 export function populateGlobalModelDropdown(selectEl, models, selectedModel) {
 	if (!selectEl) return;
@@ -824,7 +837,15 @@ export function populateGlobalModelDropdown(selectEl, models, selectedModel) {
 		selectEl.disabled = true;
 		return;
 	}
-	models.forEach(model => {
+    const selectedEndpointId = typeof selectedModel === 'object' ? selectedModel.endpoint_id : '';
+    const selectedModelId = typeof selectedModel === 'object' ? selectedModel.model_id : selectedModel;
+    const sortedModels = [...models].sort((left, right) => {
+        const leftLabel = left.display_name || left.name || left.deployment || left.id || '';
+        const rightLabel = right.display_name || right.name || right.deployment || right.id || '';
+        return leftLabel.localeCompare(rightLabel, undefined, { numeric: true, sensitivity: 'base' });
+    });
+
+	sortedModels.forEach(model => {
 		let opt = document.createElement('option');
 		opt.value = model.id || model.name || model.deployment || '';
 		opt.textContent = model.display_name || model.name || model.deployment || model.id || '';
@@ -840,7 +861,11 @@ export function populateGlobalModelDropdown(selectEl, models, selectedModel) {
 		if (model.request_model) {
 			opt.dataset.requestModel = model.request_model;
 		}
-		if (selectedModel && (model.name === selectedModel || model.request_model === selectedModel || model.deployment === selectedModel || model.id === selectedModel)) {
+        const matchesSelectedModel = model.name === selectedModelId
+            || model.request_model === selectedModelId
+            || model.deployment === selectedModelId
+            || model.id === selectedModelId;
+        if (selectedModelId && matchesSelectedModel && (!selectedEndpointId || model.endpoint_id === selectedEndpointId)) {
 			opt.selected = true;
 		}
 		selectEl.appendChild(opt);

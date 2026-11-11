@@ -2,6 +2,15 @@
 
 For feature-focused and fix-focused drill-downs by version, see [Features by Version](https://github.com/microsoft/simplechat/tree/main/docs/explanation/features) and [Fixes by Version](https://github.com/microsoft/simplechat/tree/main/docs/explanation/fixes).
 
+### **(v0.261.065)**
+
+#### Bug Fixes
+
+*   **New Agent Model Default and Ordering**
+    *   New local agents now preselect the configured chat default model when it is available to the current scope.
+    *   The model picker now orders choices alphabetically with numeric-aware comparison, while existing agents retain their saved model binding.
+    *   (Ref: `route_backend_agents.py`, `agents_common.js`, [Agent Default-Model Menu Fix](fixes/AGENT_DEFAULT_MODEL_MENU_FIX.md))
+
 ### **(v0.261.063)**
 
 #### Bug Fixes
