@@ -14,11 +14,17 @@ from xml.etree import ElementTree
 from defusedxml import ElementTree as DefusedElementTree
 from defusedxml.common import DefusedXmlException
 
+from functions_model_capabilities import CAPABILITY_STRUCTURED_OUTPUT, resolve_model_capability
+from functions_conversation_context import (
+    CONVERSATION_CONTEXT_FUNCTION_NAME,
+    CONVERSATION_CONTEXT_METADATA_TYPE,
+    CONVERSATION_CONTEXT_TOOL_NAME,
+)
 from functions_assistant_table_exports import (
-    assistant_table_export_requested,
+    assistant_csv_export_requested,
     build_assistant_table_csv,
-    build_csv_output_clarification_guidance,
     extract_assistant_table_entries,
+    extract_unambiguous_assistant_table_entries,
 )
 
 
@@ -30,6 +36,48 @@ GENERATED_FILE_FORMATS = {
     GENERATED_FILE_FORMAT_DOCX,
     GENERATED_FILE_FORMAT_PDF,
 }
+MODEL_GENERATED_CSV_RESPONSE_SCHEMA = {
+    'type': 'object',
+    'additionalProperties': False,
+    'required': ['chat_response', 'files'],
+    'properties': {
+        'chat_response': {'type': 'string'},
+        'files': {
+            'type': 'array',
+            'items': {
+                'type': 'object',
+                'additionalProperties': False,
+                'required': ['format', 'filename', 'title', 'columns', 'rows', 'row_source', 'source_action'],
+                'properties': {
+                    'format': {'type': 'string', 'enum': ['csv']},
+                    'filename': {'type': 'string'},
+                    'title': {'type': 'string'},
+                    'columns': {'type': 'array', 'items': {'type': 'string'}},
+                    'rows': {'type': 'array', 'items': {'type': 'array', 'items': {'type': 'string'}}},
+                    'row_source': {'type': 'string', 'enum': ['model', 'current_action', 'prior_action', 'prior_assistant']},
+                    'source_action': {'type': 'string'},
+                },
+            },
+        },
+    },
+}
+MODEL_GENERATED_CSV_GUIDANCE = (
+    'Return a concise user-facing answer in chat_response. Render ordinary tables as Markdown in chat_response '
+    'with files empty. Declare at most one CSV file only when the user requests a downloadable CSV, including '
+    'a follow-up to an earlier file request. Analyzing a CSV or displaying a table does not request a file. '
+    'Use files=[] for clarifications or unavailable evidence. Never claim a file is already attached. '
+    'For generated or transformed data use row_source="model", source_action="", ordered columns and complete '
+    'string-valued rows. Invent data only when explicitly requested. For an unchanged export of complete authorized '
+    'tool results use row_source="current_action" or "prior_action", source_action="PluginName.function_name", '
+    'the exact source columns and rows=[]. The server uses all rows from that action, not a sample. '
+    'Use prior_assistant with source_action="" and rows=[] only to copy the single table in the immediately '
+    'preceding assistant source; never use source copying for filtering, aggregation or other transformations. '
+    'Include format="csv", filename and title in each file entry.'
+)
+MODEL_UNSTRUCTURED_CSV_GUIDANCE = (
+    'Respond normally in chat. Render requested tables as Markdown. This invocation cannot attach a downloadable '
+    'CSV; explain that limitation when asked for one. Never claim an attachment exists.'
+)
 SUPPORTED_GENERATED_EXPORT_FORMATS = {'csv', 'json', 'xml'}
 # Only these payloads are withheld from the streamed assistant text, so only their cards
 # replace it. CSV narratives stream intact and must stay visible above the artifact card.
@@ -220,6 +268,17 @@ CSV_CLARIFICATION_REPLY_PATTERNS = (
     re.compile(r'\b(?:which|what)\s+(?:columns?|fields?)\b'),
     re.compile(r'\b(?:columns?|fields?)\s+(?:should|would|do)\s+(?:it|they|the\s+\w+)\s+include\b'),
 )
+CSV_ARTIFACT_OFFER_PATTERN = re.compile(
+    r'\b(?:can|could|would\s+(?:you\s+)?like\s+me\s+to|would\s+be\s+happy\s+to|ready\s+to)\b.{0,160}'
+    r'\b(?:create|generate|make|prepare|export)\b.{0,80}\bcsv\b'
+    r'|\b(?:create|generate|make|prepare|export)\b.{0,80}\bcsv\b.{0,80}'
+    r'\b(?:if\s+you\s+want|when\s+you\s+are\s+ready|on\s+request)\b',
+    re.IGNORECASE,
+)
+CSV_ARTIFACT_AFFIRMATION_PATTERN = re.compile(
+    r'^(?:yes|yeah|yep|sure|certainly|please|go\s+ahead|do\s+it|that\s+works|sounds\s+good)\b',
+    re.IGNORECASE,
+)
 CSV_CLARIFICATION_REPLY_MAX_CHARS = 500
 # A retrieval action that dwarfs the turn's other calls is the payload; the rest are lookups.
 DOMINANT_FUNCTION_RESULT_MIN_ROWS = 10
@@ -227,13 +286,8 @@ DOMINANT_FUNCTION_RESULT_RATIO = 5
 ROW_SOURCE_ASSISTANT = 'assistant response'
 ROW_SOURCE_CURRENT_ACTION = 'structured function result'
 ROW_SOURCE_EARLIER_ACTION = 'earlier action result'
+ROW_SOURCE_EARLIER_ASSISTANT = 'earlier assistant response'
 FUNCTION_RESULT_ROW_SOURCES = frozenset({ROW_SOURCE_CURRENT_ACTION, ROW_SOURCE_EARLIER_ACTION})
-CSV_PUBLICATION_GUIDANCE = (
-    'The server serializes the authorized action results into the requested CSV artifact and '
-    'attaches the file after generation. Do not claim that you cannot create or attach files, '
-    'do not tell the user to copy or save rows manually, and do not paste a sample of the rows '
-    'in place of the artifact.'
-)
 # Agents commonly re-request an action from the same start time, which re-reads rows already held.
 GENERATED_FILE_PAGING_GUIDANCE = (
     'When an action reports that its results were truncated, request the remaining data with a '
@@ -278,7 +332,7 @@ def _clause_negates_output_format(clause: str, output_format: str) -> bool:
 
 
 def _first_csv_artifact_position(user_question: str, normalized_question: str) -> Optional[int]:
-    if not assistant_table_export_requested(user_question):
+    if not assistant_csv_export_requested(user_question):
         return None
     for clause, clause_offset in _iter_request_clauses(normalized_question):
         if _clause_negates_output_format(clause, 'csv'):
@@ -423,6 +477,149 @@ def generated_file_export_requested(user_question: str) -> bool:
     return get_requested_generated_file_format(user_question) is not None
 
 
+def build_model_generated_csv_response_format() -> Dict[str, Any]:
+    """Build the strict response-format envelope for a model-produced CSV specification."""
+    return {
+        'type': 'json_schema',
+        'json_schema': {
+            'name': 'simplechat_csv_file_response',
+            'strict': True,
+            'schema': MODEL_GENERATED_CSV_RESPONSE_SCHEMA,
+        },
+    }
+
+
+def prepare_model_csv_response(messages, model, model_id=None):
+    """Configure optional CSV output for a final, OpenAI-compatible model invocation."""
+    user_content = next((
+        str(message.get('content') or '') for message in reversed(messages)
+        if isinstance(message, dict) and message.get('role') == 'user'
+    ), '')
+    requested_format = get_requested_artifact_formats(user_content)
+    if any(output_format != 'csv' for output_format in requested_format):
+        return None
+    supported = any(
+        resolve_model_capability(CAPABILITY_STRUCTURED_OUTPUT, identifier, default=False) is True
+        for identifier in (model, model_id) if identifier
+    )
+    guidance = MODEL_GENERATED_CSV_GUIDANCE if supported else MODEL_UNSTRUCTURED_CSV_GUIDANCE
+    messages.insert(0, {'role': 'system', 'content': guidance})
+    return build_model_generated_csv_response_format() if supported else None
+
+
+def decode_model_csv_response(response_content):
+    """Return visible text and a validated declaration; never expose a broken envelope."""
+    parsed = parse_model_generated_csv_response(response_content)
+    if parsed:
+        return parsed['chat_response'], parsed['file_spec']
+    recovered = extract_model_generated_chat_response(response_content)
+    if recovered is not None:
+        return recovered, None
+    return 'The model could not produce a valid response. Please try again.', None
+
+
+def create_model_csv_completion(client, model, messages, model_id=None):
+    """Use the shared CSV contract, retrying rejected schema requests as text only."""
+    messages = [dict(message) for message in messages]
+    response_format = prepare_model_csv_response(messages, model, model_id)
+    parameters = {'model': model, 'messages': messages}
+    if response_format:
+        parameters['response_format'] = response_format
+    try:
+        return client.chat.completions.create(**parameters), bool(response_format)
+    except Exception as exc:
+        error_text = str(exc).lower()
+        rejected = any(marker in error_text for marker in ('response_format', 'json_schema')) and any(
+            marker in error_text for marker in ('not support', 'unsupported', 'unrecognized', 'invalid', 'unknown')
+        )
+        if not response_format or not rejected:
+            raise
+        parameters.pop('response_format')
+        messages[:] = [message for message in messages if message.get('content') != MODEL_GENERATED_CSV_GUIDANCE]
+        messages.insert(0, {'role': 'system', 'content': MODEL_UNSTRUCTURED_CSV_GUIDANCE})
+        return client.chat.completions.create(**parameters), False
+
+
+def parse_model_generated_csv_response(response_content: Any) -> Optional[Dict[str, Any]]:
+    """Parse and validate structured CSV content returned by a model."""
+    try:
+        response_payload = json.loads(str(response_content or ''))
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(response_payload, dict) or set(response_payload) != {'chat_response', 'files'}:
+        return None
+    chat_response = response_payload.get('chat_response')
+    file_specs = response_payload.get('files')
+    if not isinstance(chat_response, str) or not isinstance(file_specs, list) or len(file_specs) > 1:
+        return None
+    if not file_specs:
+        return {'chat_response': chat_response, 'file_spec': None}
+
+    file_spec = file_specs[0]
+    if (
+        not isinstance(file_spec, dict)
+        or not {'format', 'filename', 'title', 'columns', 'rows'}.issubset(file_spec)
+        or set(file_spec) - {'format', 'filename', 'title', 'columns', 'rows', 'row_source', 'source_action'}
+        or file_spec.get('format') != GENERATED_FILE_FORMAT_CSV
+        or not isinstance(file_spec.get('filename'), str)
+        or len(file_spec.get('filename')) > 255
+        or not isinstance(file_spec.get('title'), str)
+        or len(file_spec.get('title')) > 255
+    ):
+        return None
+    columns = file_spec.get('columns')
+    rows = file_spec.get('rows')
+    row_source = file_spec.get('row_source', 'model')
+    source_action = file_spec.get('source_action', '')
+    if (
+        row_source not in ('model', 'current_action', 'prior_action', 'prior_assistant')
+        or not isinstance(source_action, str)
+        or len(source_action) > 255
+        or (row_source in ('current_action', 'prior_action') and not source_action)
+        or (row_source in ('model', 'prior_assistant') and source_action != '')
+        or not isinstance(columns, list)
+        or not columns
+        or len(columns) > 100
+        or any(not isinstance(column, str) or not column.strip() for column in columns)
+        or len({column.strip().casefold() for column in columns if isinstance(column, str)}) != len(columns)
+        or any(_is_sensitive_function_result_key(column) for column in columns)
+        or not isinstance(rows, list)
+        or (row_source == 'model' and not rows)
+        or (row_source != 'model' and rows != [])
+        or len(rows) > 10000
+        or any(
+            not isinstance(row, list)
+            or len(row) != len(columns)
+            or any(not isinstance(value, str) or len(value) > 65536 for value in row)
+            for row in rows
+        )
+        or sum(len(value) for row in rows for value in row) > 5_000_000
+    ):
+        return None
+    return {
+        'chat_response': chat_response,
+        'file_spec': {
+            'format': GENERATED_FILE_FORMAT_CSV,
+            'columns': [column.strip() for column in columns],
+            'rows': rows,
+            'row_source': row_source,
+            'source_action': source_action,
+        },
+    }
+
+
+def extract_model_generated_chat_response(response_content: Any) -> Optional[str]:
+    """Recover only the chat text from a structured response that failed file validation."""
+    try:
+        response_payload = json.loads(str(response_content or ''))
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(response_payload, dict):
+        return None
+    chat_response = response_payload.get('chat_response')
+    return chat_response if isinstance(chat_response, str) else None
+
+
 def _question_requires_derived_output(normalized_question: str) -> bool:
     return any(pattern.search(normalized_question) for pattern in PASSTHROUGH_DERIVED_OUTPUT_PATTERNS)
 
@@ -490,16 +687,7 @@ def build_generated_file_output_guidance(
         or get_requested_structured_artifact_format(user_question)
     )
     if output_format == GENERATED_FILE_FORMAT_CSV:
-        clarification_guidance = build_csv_output_clarification_guidance(user_question)
-        return ' '.join(
-            guidance_part
-            for guidance_part in (
-                clarification_guidance,
-                CSV_PUBLICATION_GUIDANCE,
-                GENERATED_FILE_PAGING_GUIDANCE,
-            )
-            if guidance_part
-        )
+        return ''
     if output_format == 'json':
         return (
             'The user requested a downloadable JSON artifact. The server will validate and attach the file after '
@@ -557,12 +745,66 @@ def build_generated_file_export(
     function_results: Optional[List[Dict[str, Any]]] = None,
     prior_function_results_loader: Optional[Callable[[], Optional[List[Dict[str, Any]]]]] = None,
     pending_output_format: Optional[str] = None,
+    prior_assistant_source_loader: Optional[Callable[[], Optional[Dict[str, Any]]]] = None,
+    structured_csv_spec: Optional[Dict[str, Any]] = None,
+    require_structured_csv_spec: bool = True,
 ) -> Optional[Dict[str, Any]]:
     """Build a generated file payload from final assistant content and function-result evidence."""
-    output_format = get_requested_generated_file_format(user_question) or _normalize_pending_output_format(
-        pending_output_format,
-    )
+    if structured_csv_spec is not None:
+        if not isinstance(structured_csv_spec, dict):
+            return None
+        validated = parse_model_generated_csv_response(json.dumps({
+            'chat_response': str(assistant_content or ''),
+            'files': [{
+                'format': GENERATED_FILE_FORMAT_CSV,
+                'filename': '',
+                'title': '',
+                **structured_csv_spec,
+            }],
+        }))
+        if not validated or not validated['file_spec']:
+            return None
+        file_spec = validated['file_spec']
+        rows = [dict(zip(file_spec['columns'], row)) for row in file_spec['rows']]
+        source = file_spec['row_source']
+        rows_truncated = False
+        provenance = ROW_SOURCE_ASSISTANT
+        if source in ('current_action', 'prior_action'):
+            source_results = function_results
+            if source == 'prior_action':
+                source_results = prior_function_results_loader() if prior_function_results_loader else []
+            source_results = [
+                result for result in source_results or []
+                if isinstance(result, dict)
+                and f"{result.get('plugin_name')}.{result.get('function_name')}" == file_spec['source_action']
+            ]
+            rows = extract_authorized_function_result_rows(source_results)
+            rows_truncated = function_results_report_truncated_rows(source_results)
+            provenance = ROW_SOURCE_CURRENT_ACTION if source == 'current_action' else ROW_SOURCE_EARLIER_ACTION
+        elif source == 'prior_assistant':
+            prior_source = prior_assistant_source_loader() if prior_assistant_source_loader else None
+            if not isinstance(prior_source, dict) or prior_source.get('reuse_blocked'):
+                return None
+            rows = extract_unambiguous_assistant_table_entries(prior_source.get('content') or '')
+            provenance = ROW_SOURCE_EARLIER_ASSISTANT
+        if not rows or any(set(row) != set(file_spec['columns']) for row in rows):
+            return None
+        rows = [{column: row[column] for column in file_spec['columns']} for row in rows]
+        return _build_generated_file_payload(
+            output_format=GENERATED_FILE_FORMAT_CSV,
+            file_content=build_assistant_table_csv(rows),
+            rows=rows,
+            row_source=provenance,
+            assistant_content=str(assistant_content or ''),
+            passthrough_reason_code='declared_source_copy' if source != 'model' else None,
+            rows_truncated=rows_truncated,
+        )
+    requested_output_format = get_requested_generated_file_format(user_question)
+    normalized_pending_output_format = _normalize_pending_output_format(pending_output_format)
+    output_format = requested_output_format or normalized_pending_output_format
     if output_format not in GENERATED_FILE_FORMATS:
+        return None
+    if output_format == GENERATED_FILE_FORMAT_CSV:
         return None
     carried_output_format = (
         output_format if not get_requested_generated_file_format(user_question) else None
@@ -575,7 +817,11 @@ def build_generated_file_export(
     function_rows = extract_authorized_function_result_rows(function_results)
     row_provenance = ROW_SOURCE_CURRENT_ACTION
     rows_truncated = function_results_report_truncated_rows(function_results) if function_rows else False
-    if not assistant_rows and not function_rows and prior_function_results_loader is not None:
+    if (
+        not assistant_rows
+        and not function_rows
+        and prior_function_results_loader is not None
+    ):
         # This turn answered from evidence gathered earlier, so reuse those rows instead of none.
         prior_function_results = prior_function_results_loader()
         function_rows = extract_authorized_function_result_rows(prior_function_results)
@@ -587,25 +833,6 @@ def build_generated_file_export(
         rows=function_rows,
         carried_output_format=carried_output_format,
     ) if function_rows else {'allowed': False, 'reason_code': 'source_result_incomplete'}
-
-    if output_format == GENERATED_FILE_FORMAT_CSV:
-        use_function_rows = bool(function_rows) and bool(function_passthrough.get('allowed')) and (
-            not assistant_rows
-            or _assistant_rows_sample_function_rows(assistant_rows, function_rows)
-        )
-        rows = function_rows if use_function_rows else assistant_rows
-        if not rows:
-            return None
-        row_source = row_provenance if use_function_rows else ROW_SOURCE_ASSISTANT
-        return _build_generated_file_payload(
-            output_format=output_format,
-            file_content=build_assistant_table_csv(rows),
-            rows=rows,
-            row_source=row_source,
-            assistant_content=assistant_text,
-            passthrough_reason_code=(function_passthrough.get('reason_code') if use_function_rows else None),
-            rows_truncated=rows_truncated if use_function_rows else False,
-        )
 
     if not assistant_text and not assistant_rows and not function_rows:
         return None
@@ -708,7 +935,11 @@ def _collect_authorized_function_row_groups(
     for function_result in function_results or []:
         if not isinstance(function_result, dict):
             continue
-        if function_result.get('success') is False or _is_tabular_function_result(function_result):
+        if (
+            _is_conversation_context_citation(function_result)
+            or function_result.get('success') is False
+            or _is_tabular_function_result(function_result)
+        ):
             continue
 
         structured_rows = _extract_function_result_rows(
@@ -758,7 +989,11 @@ def function_results_report_truncated_rows(
     for function_result in function_results or []:
         if not isinstance(function_result, dict):
             continue
-        if function_result.get('success') is False or _is_tabular_function_result(function_result):
+        if (
+            _is_conversation_context_citation(function_result)
+            or function_result.get('success') is False
+            or _is_tabular_function_result(function_result)
+        ):
             continue
         payload = _parse_function_result_payload(function_result.get('function_result'))
         if not _extract_function_result_rows(payload):
@@ -857,10 +1092,30 @@ def estimate_function_result_row_count(function_result: Optional[Dict[str, Any]]
     """Estimate an action's stored rows from its compacted citation, reading no payload."""
     if not isinstance(function_result, dict):
         return 0
-    if function_result.get('success') is False or _is_tabular_function_result(function_result):
+    if (
+        _is_conversation_context_citation(function_result)
+        or function_result.get('success') is False
+        or _is_tabular_function_result(function_result)
+    ):
         return 0
     return _estimate_payload_row_count(
         _parse_function_result_payload(function_result.get('function_result')),
+    )
+
+
+def _is_conversation_context_citation(function_result: Dict[str, Any]) -> bool:
+    """Keep grounding metadata out of action-result datasets and artifact estimates."""
+    metadata_type = str(function_result.get('metadata_type') or '').strip().casefold()
+    if metadata_type == CONVERSATION_CONTEXT_METADATA_TYPE.casefold():
+        return True
+
+    plugin_name = str(function_result.get('plugin_name') or '').strip().casefold()
+    function_name = str(function_result.get('function_name') or '').strip().casefold()
+    tool_name = str(function_result.get('tool_name') or '').strip().casefold()
+    is_context_function = function_name == CONVERSATION_CONTEXT_FUNCTION_NAME.casefold()
+    return is_context_function and (
+        plugin_name == 'simplechat'
+        or tool_name == CONVERSATION_CONTEXT_TOOL_NAME.casefold()
     )
 
 
@@ -918,7 +1173,12 @@ def resolve_pending_generated_file_format(
         return None
     if get_requested_artifact_formats(user_question):
         return None
-    if not _assistant_reply_requests_clarification(previous_assistant_content):
+    previous_reply_is_clarification = _assistant_reply_requests_clarification(previous_assistant_content)
+    previous_reply_offers_csv = bool(
+        CSV_ARTIFACT_OFFER_PATTERN.search(str(previous_assistant_content or ''))
+        and CSV_ARTIFACT_AFFIRMATION_PATTERN.search(str(user_question or '').strip())
+    )
+    if not previous_reply_is_clarification and not previous_reply_offers_csv:
         return None
     return GENERATED_FILE_FORMAT_CSV
 
@@ -929,53 +1189,6 @@ def _assistant_reply_requests_clarification(assistant_content: str) -> bool:
     if '?' not in normalized_content or len(normalized_content) > CSV_CLARIFICATION_REPLY_MAX_CHARS:
         return False
     return any(pattern.search(normalized_content) for pattern in CSV_CLARIFICATION_REPLY_PATTERNS)
-
-
-def _normalized_row_text_map(row: Dict[str, Any]) -> Dict[str, str]:
-    return {
-        _normalize_function_result_key(column_name): (
-            '' if value is None else str(value).strip()
-        )
-        for column_name, value in row.items()
-    }
-
-
-def _assistant_rows_sample_function_rows(
-    assistant_rows: Sequence[Dict[str, Any]],
-    function_rows: Sequence[Dict[str, Any]],
-) -> bool:
-    """Return whether the assistant table is an excerpt of the same authorized rows."""
-    if not assistant_rows or len(assistant_rows) >= len(function_rows):
-        return False
-
-    assistant_row_maps = []
-    assistant_columns = []
-    seen_columns = set()
-    for assistant_row in assistant_rows:
-        if not isinstance(assistant_row, dict):
-            return False
-        row_map = _normalized_row_text_map(assistant_row)
-        assistant_row_maps.append(row_map)
-        for column_name in row_map:
-            if column_name and column_name not in seen_columns:
-                seen_columns.add(column_name)
-                assistant_columns.append(column_name)
-    if not assistant_columns:
-        return False
-
-    function_projections = set()
-    for function_row in function_rows:
-        if not isinstance(function_row, dict):
-            return False
-        row_map = _normalized_row_text_map(function_row)
-        if not seen_columns.issubset(row_map):
-            return False
-        function_projections.add(tuple(row_map[column_name] for column_name in assistant_columns))
-
-    return all(
-        tuple(row_map.get(column_name, '') for column_name in assistant_columns) in function_projections
-        for row_map in assistant_row_maps
-    )
 
 
 def has_generated_file_output(existing_outputs: Optional[List[Dict[str, Any]]], output_format: str) -> bool:
@@ -1045,6 +1258,43 @@ def build_generated_file_artifact_metadata(
             'viewer_can_approve': False,
         }
     return artifact_metadata
+
+
+def normalize_link_only_csv_handoff(
+    assistant_content: Any,
+    artifact_metadata: Optional[Dict[str, Any]],
+) -> str:
+    """Replace a link-only CSV claim with a handoff grounded in publication metadata."""
+    content = str(assistant_content or '').strip()
+    if not content or not _is_link_only_artifact_handoff(content):
+        return content
+
+    metadata = artifact_metadata if isinstance(artifact_metadata, dict) else {}
+    output_format = str(metadata.get('output_format') or '').strip().lower()
+    if output_format and output_format != 'csv':
+        return content
+    if metadata.get('background_export'):
+        return 'The CSV export is queued for processing and will appear in this chat when it is ready.'
+
+    approval = metadata.get('approval')
+    if isinstance(approval, dict) and approval.get('is_pending'):
+        return 'The CSV artifact is ready and is pending approval before it can be downloaded.'
+    if str(metadata.get('artifact_message_id') or '').strip():
+        return 'The CSV artifact was published and is available in this chat.'
+    return 'I could not confirm that a CSV artifact was published, so no download is available.'
+
+
+def _is_link_only_artifact_handoff(content: str) -> bool:
+    markdown_link_pattern = re.compile(r'!?\[[^\]]+\]\([^)]*\)')
+    html_link_pattern = re.compile(r'<a\b[^>]*>.*?</a\s*>', flags=re.IGNORECASE | re.DOTALL)
+    linked_content = markdown_link_pattern.sub('', content)
+    linked_content, html_link_count = html_link_pattern.subn('', linked_content)
+    markdown_link_count = len(markdown_link_pattern.findall(content))
+    if not markdown_link_count and not html_link_count:
+        return False
+    residual_content = re.sub(r'<[^>]*>', '', linked_content)
+    residual_content = re.sub(r'[`*_~#>]', '', residual_content)
+    return not residual_content.strip(' \t\r\n.,:;!?-')
 
 
 def _build_generated_file_payload(

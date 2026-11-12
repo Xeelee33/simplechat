@@ -5,9 +5,9 @@ Functional test for assistant-rendered table CSV artifacts.
 Version: 0.260.005
 Implemented in: 0.241.050; non-tabular document CSV parsing in 0.250.065; generated file export framework in 0.250.072; updated in 0.250.073; linear fence parsing coverage in 0.250.112; version assertion compatibility updated in 0.250.172; Word function-result serialization restored in 0.250.178; CSV assistant-text preservation in 0.260.005
 
-This test ensures that explicit table-format requests with assistant-rendered
-tables, including CSV rows extracted from non-tabular documents, are converted
-into downloadable CSV artifact metadata for the chat UI.
+This test ensures that explicit CSV requests with assistant-rendered tables,
+including CSV rows extracted from non-tabular documents, are converted into
+downloadable CSV artifact metadata for the chat UI.
 """
 
 import ast
@@ -34,6 +34,7 @@ IMPLEMENTED_VERSION = '0.250.112'
 sys.path.append(str(APP_DIR))
 
 from functions_assistant_table_exports import (  # noqa: E402
+    assistant_csv_export_requested,
     assistant_table_export_requested,
     build_csv_output_clarification_guidance,
     build_safe_csv_headers,
@@ -42,11 +43,16 @@ from functions_assistant_table_exports import (  # noqa: E402
     neutralize_csv_spreadsheet_formula,
 )
 from functions_generated_file_exports import (  # noqa: E402
+    MODEL_UNSTRUCTURED_CSV_GUIDANCE,
+    build_model_generated_csv_response_format,
     build_generated_file_artifact_metadata,
     build_generated_file_export,
     get_generated_file_export_content,
     get_requested_generated_file_format,
     has_generated_file_output,
+    extract_model_generated_chat_response,
+    parse_model_generated_csv_response,
+    resolve_pending_generated_file_format,
 )
 
 
@@ -109,6 +115,26 @@ def load_workflow_generated_file_export_helper(namespace):
     return namespace['_maybe_create_workflow_generated_file_output']
 
 
+def load_chat_completion_fallback_helper():
+    module_tree = ast.parse(read_text(CHAT_ROUTE_FILE), filename=str(CHAT_ROUTE_FILE))
+    helper_names = {
+        '_append_unstructured_csv_response_guidance',
+        '_create_chat_completion_with_response_format_fallback',
+        '_replace_chat_system_guidance',
+    }
+    selected_nodes = [
+        node for node in module_tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name in helper_names
+    ]
+    if {node.name for node in selected_nodes} != helper_names:
+        raise AssertionError('Expected the structured response-format fallback helpers.')
+    namespace = {'MODEL_UNSTRUCTURED_CSV_GUIDANCE': MODEL_UNSTRUCTURED_CSV_GUIDANCE}
+    extracted_module = ast.Module(body=selected_nodes, type_ignores=[])
+    exec(compile(extracted_module, str(CHAT_ROUTE_FILE), 'exec'), namespace)
+    return namespace['_create_chat_completion_with_response_format_fallback']
+
+
 def test_markdown_table_response_builds_csv_export():
     print('Testing Markdown table response CSV export creation...')
 
@@ -124,7 +150,7 @@ If you want, I can also turn this into a CSV.
 """
 
     export_payload = build_assistant_table_csv_export(
-        'turn this into a table for me',
+        'turn this into a CSV file for me',
         assistant_content,
     )
 
@@ -227,6 +253,7 @@ def test_structured_action_result_builds_csv_when_assistant_summarizes():
         'save the action results as one CSV',
         'The billing action returned two invoices.',
         function_results=action_results,
+        structured_csv_spec={'columns': ['Invoice Number', 'Amount'], 'rows': [], 'row_source': 'current_action', 'source_action': 'BillingPlugin.list_invoices'},
     )
 
     assert_true(export_payload is not None, 'Expected structured action data to produce a CSV when the assistant summarizes it.')
@@ -259,6 +286,10 @@ def test_structured_action_results_combine_and_preserve_assistant_priority():
         'create a combined CSV',
         'The directory actions completed.',
         function_results=action_results,
+        structured_csv_spec={
+            'columns': ['Source action', 'Name', 'Department'],
+            'rows': [['list_people', 'Ada', 'Engineering'], ['list_contractors', 'Grace', 'Operations']],
+        },
     )
     action_rows = parse_csv_rows(action_export.get('file_content'))
     assert_true(len(action_rows) == 2, 'Expected data rows from both action results.')
@@ -274,6 +305,7 @@ def test_structured_action_results_combine_and_preserve_assistant_priority():
 | Assistant-selected | Finance |
 ''',
         function_results=action_results,
+    structured_csv_spec={'columns': ['Name', 'Department'], 'rows': [['Assistant-selected', 'Finance']]},
     )
     assistant_rows = parse_csv_rows(assistant_export.get('file_content'))
     assert_true(len(assistant_rows) == 1, 'Expected a valid assistant table to take priority over action rows.')
@@ -819,7 +851,7 @@ def test_non_table_requests_do_not_create_exports():
 
 
 def test_natural_table_request_phrase_is_recognized():
-    print('Testing natural table request phrasing...')
+    print('Testing in-chat table requests do not create CSV artifacts...')
 
     assistant_content = """| Comment ID | Summary |
 | --- | --- |
@@ -828,19 +860,38 @@ def test_natural_table_request_phrase_is_recognized():
 
     assert_true(
         assistant_table_export_requested('put that into a table and include the comment id'),
-        "Expected 'put that into a table' phrasing to trigger assistant table export detection.",
+        "Expected 'put that into a table' phrasing to be recognized as table-shaped output.",
     )
     assert_true(
         build_assistant_table_csv_export(
             'put that into a table and include the comment id',
             assistant_content,
-        ) is not None,
-        "Expected natural table phrasing to produce an assistant table CSV export.",
+        ) is None,
+        "Expected a table-only request not to create a downloadable CSV.",
+    )
+    table_request = 'generate a table with 18 records and whatever columns you want'
+    assert_true(
+        assistant_table_export_requested(table_request),
+        'Expected the original phrasing to remain recognized as a table request.',
+    )
+    assert_true(
+        get_requested_generated_file_format(table_request) is None,
+        'Expected a generic table request not to select a generated file format.',
+    )
+    assert_true(
+        build_csv_output_clarification_guidance(table_request) == '',
+        'Expected a table-only request not to receive CSV schema clarification guidance.',
+    )
+    non_csv_follow_up = "i didn't want it in a csv yet, i just want you to show me the table"
+    assert_true(
+        not assistant_csv_export_requested(non_csv_follow_up)
+        and get_requested_generated_file_format(non_csv_follow_up) is None,
+        'Expected explicit CSV negation to keep the follow-up in-chat.',
     )
 
 
-def test_natural_csv_and_create_table_phrases_are_recognized():
-    print('Testing natural CSV and create-table request phrasing...')
+def test_natural_csv_and_spreadsheet_phrases_are_recognized():
+    print('Testing natural CSV and spreadsheet request phrasing...')
 
     assistant_content = """| Day | Type |
 | --- | --- |
@@ -867,7 +918,6 @@ def test_natural_csv_and_create_table_phrases_are_recognized():
         'Do not summarize; create a CSV.',
         'CSV file, please.',
         'Make a spreadsheet from this document.',
-        'create a table of the days of the week',
     ]
 
     for request_phrase in request_phrases:
@@ -935,6 +985,193 @@ def test_csv_schema_clarification_guidance_is_specific_and_resumable():
         build_csv_output_clarification_guidance('Summarize the selected sources.') == '',
         'Expected non-CSV requests not to receive CSV clarification guidance.',
     )
+    assert_true(
+        resolve_pending_generated_file_format(
+            'Yes, please generate it.',
+            'I can generate a CSV of the fictional people if you want.',
+        ) == 'csv',
+        'Expected an affirmative reply to an explicit CSV offer to carry the requested format forward.',
+    )
+    assert_true(
+        resolve_pending_generated_file_format(
+            'Yes, please.',
+            'Would you like me to generate a CSV of the fictional people?',
+        ) == 'csv',
+        'Expected a direct yes/no CSV offer to carry the requested format forward.',
+    )
+
+
+def test_model_generated_csv_response_is_validated():
+    print('Testing structured model-generated CSV response validation...')
+
+    payload = {
+        'chat_response': 'I created the requested fictional people dataset.',
+        'files': [{
+            'format': 'csv',
+            'filename': 'fictional_people.csv',
+            'title': 'Fictional people',
+            'columns': ['Name', 'City'],
+            'rows': [['Avery Example', 'Sampleton'], ['Morgan Sample', 'Example City']],
+        }],
+    }
+    parsed = parse_model_generated_csv_response(json.dumps(payload))
+    assert_true(parsed is not None, 'Expected a well-formed structured CSV response to parse.')
+    assert_true(parsed['chat_response'] == payload['chat_response'], 'Expected chat text to be preserved.')
+    assert_true(parsed['file_spec']['rows'] == payload['files'][0]['rows'], 'Expected generated rows to be preserved.')
+    inline_table_response = {
+        'chat_response': '| Name | City |\n| --- | --- |\n| Inline Person | Sampleton |',
+        'files': [],
+    }
+    parsed_inline_table = parse_model_generated_csv_response(json.dumps(inline_table_response))
+    assert_true(
+        parsed_inline_table is not None and parsed_inline_table['file_spec'] is None,
+        'Expected a valid inline-table response to explicitly declare no downloadable file.',
+    )
+    no_file_export = build_generated_file_export(
+        'Create a CSV of the people.',
+        parsed_inline_table['chat_response'],
+        require_structured_csv_spec=True,
+    )
+    assert_true(
+        no_file_export is None,
+        'Expected an empty model files array to prevent phrase-inferred artifact creation.',
+    )
+    generated_export = build_generated_file_export(
+        'Create a CSV of fictional people.',
+        parsed['chat_response'],
+        structured_csv_spec=parsed['file_spec'],
+    )
+    assert_true(generated_export is not None, 'Expected structured rows to use the standard CSV export builder.')
+    csv_content = generated_export['file_content']
+    assert_true(csv_content.startswith('Name,City'), 'Expected the server CSV serializer to write the headers.')
+    table_export = build_generated_file_export(
+        'Show a table of the people.',
+        '| Name | City |\n| --- | --- |\n| Parsed Person | Sampleton |',
+        structured_csv_spec={'columns': ['Name'], 'rows': [['Different Person']]},
+        require_structured_csv_spec=True,
+    )
+    assert_true(
+        table_export['preview_rows'][0]['Name'] == 'Different Person',
+        'Expected the model-declared file spec to determine CSV rows for a table-only request.',
+    )
+    fallback_table_export = build_generated_file_export(
+        'Create a CSV of the people.',
+        '| Name | City |\n| --- | --- |\n| Parsed Person | Sampleton |',
+        require_structured_csv_spec=True,
+    )
+    assert_true(
+        fallback_table_export is None,
+        'Expected plain-text fallback tables not to be scraped into downloadable files.',
+    )
+
+    formula_payload = json.loads(json.dumps(payload))
+    formula_payload['files'][0]['rows'][0][0] = '=HYPERLINK("https://example.invalid")'
+    parsed_formula = parse_model_generated_csv_response(json.dumps(formula_payload))
+    formula_export = build_generated_file_export(
+        'Create a CSV of fictional people.',
+        parsed_formula['chat_response'],
+        structured_csv_spec=parsed_formula['file_spec'],
+    )
+    assert_true(
+        "'=HYPERLINK" in formula_export['file_content'],
+        'Expected model-produced cell values to retain spreadsheet formula neutralization.',
+    )
+
+    action_result = [{
+        'plugin_name': 'BillingPlugin',
+        'function_name': 'list_invoices',
+        'success': True,
+        'function_result': {'rows': [{'Invoice Number': 'AUTHORIZED-1', 'Amount': '42'}]},
+    }]
+    action_export = build_generated_file_export(
+        'save the action results as one CSV',
+        'The billing action returned one invoice.',
+        function_results=action_result,
+        structured_csv_spec={'columns': ['Invoice Number', 'Amount'], 'rows': [], 'row_source': 'current_action', 'source_action': 'BillingPlugin.list_invoices'},
+        require_structured_csv_spec=True,
+    )
+    assert_true(
+        action_export['preview_rows'][0]['Invoice Number'] == 'AUTHORIZED-1',
+        'Expected an explicit action-source declaration to use authorized action rows.',
+    )
+
+    response_format = build_model_generated_csv_response_format()
+    assert_true(response_format['type'] == 'json_schema', 'Expected a strict JSON schema response format.')
+    assert_true(response_format['json_schema']['strict'] is True, 'Expected strict schema mode.')
+
+    malformed_payloads = []
+    bad_row = json.loads(json.dumps(payload))
+    bad_row['files'][0]['rows'][0].append('unexpected')
+    malformed_payloads.append(bad_row)
+    sensitive_header = json.loads(json.dumps(payload))
+    sensitive_header['files'][0]['columns'][0] = 'api_key'
+    malformed_payloads.append(sensitive_header)
+    multiple_files = json.loads(json.dumps(payload))
+    multiple_files['files'].append(dict(multiple_files['files'][0]))
+    malformed_payloads.append(multiple_files)
+
+    for malformed_payload in malformed_payloads:
+        assert_true(
+            parse_model_generated_csv_response(json.dumps(malformed_payload)) is None,
+            'Expected malformed, unsafe, or unsupported structured output to be rejected.',
+        )
+    invalid_file_response = json.loads(json.dumps(payload))
+    invalid_file_response['files'][0]['columns'][0] = 'api_key'
+    assert_true(
+        extract_model_generated_chat_response(json.dumps(invalid_file_response))
+        == payload['chat_response'],
+        'Expected only the chat narrative to be recoverable when file validation fails.',
+    )
+    assert_true(
+        extract_model_generated_chat_response('not json') is None,
+        'Expected unstructured content not to be mistaken for recovered chat text.',
+    )
+
+
+def test_structured_response_format_rejection_retries_as_plain_text():
+    print('Testing structured response-format fallback...')
+
+    class FakeCompletions:
+        def __init__(self):
+            self.calls = []
+
+        def create(self, **params):
+            self.calls.append(params)
+            if 'response_format' in params:
+                raise ValueError('response_format is not supported')
+            return {'content': 'plain text fallback'}
+
+    class FakeClient:
+        def __init__(self):
+            self.chat = type('Chat', (), {'completions': FakeCompletions()})()
+
+    fallback = load_chat_completion_fallback_helper()
+    client = FakeClient()
+    messages = [
+        {'role': 'system', 'content': 'Return a concise user-facing answer in chat_response. Use the schema.'},
+        {'role': 'user', 'content': 'Create a CSV.'},
+    ]
+    response = fallback(client, {
+        'model': 'test-model',
+        'messages': messages,
+        'response_format': build_model_generated_csv_response_format(),
+    })
+
+    assert_true(response == {'content': 'plain text fallback'}, 'Expected unsupported schema mode to retry successfully.')
+    assert_true(len(client.chat.completions.calls) == 2, 'Expected exactly one plain-text retry.')
+    assert_true('response_format' not in client.chat.completions.calls[1], 'Expected schema mode to be removed on retry.')
+    assert_true(
+        not any('chat_response' in message.get('content', '') for message in messages),
+        'Expected structured-only guidance to be removed from the fallback request.',
+    )
+    assert_true(
+        any('Respond normally in chat.' in message.get('content', '') for message in messages),
+        'Expected plain-text fallback to receive non-artifact response guidance.',
+    )
+    assert_true(
+        not any('downloadable CSV specification' in message.get('content', '') for message in messages),
+        'Expected plain-text fallback not to receive structured artifact instructions.',
+    )
 
 
 def test_workflow_generated_file_artifacts_reuse_shared_contract():
@@ -984,6 +1221,7 @@ Source: ParkingPrint.pdf, Page: 1
         'conversation-1',
         workflow['task_prompt'],
         assistant_content,
+        structured_csv_spec={'columns': ['Name', 'Invoice Number'], 'rows': [['Contoso', 'DCAW1366188']]},
     )
     assert_true(artifact is not None, 'Expected a workflow CSV artifact for valid assistant rows.')
     assert_true(artifact['artifact_message_id'] == 'workflow-csv-artifact', 'Expected uploaded workflow artifact metadata.')
@@ -1042,6 +1280,7 @@ Source: ParkingPrint.pdf, Page: 1
         'conversation-1',
         workflow['task_prompt'],
         assistant_content,
+        structured_csv_spec={'columns': ['Name', 'Invoice Number'], 'rows': [['Contoso', 'DCAW1366188']]},
     )
     assert_true(background_artifact['background_export'] is True, 'Expected large workflow exports to queue durably.')
     assert_true(queue_requests[-1]['passthrough_input_rows'] is True, 'Expected workflow rows to avoid a second model call.')
@@ -1091,7 +1330,16 @@ def test_csv_artifact_card_appends_below_assistant_response():
     chat_route_content = read_text(CHAT_ROUTE_FILE)
     assert_true(
         "suppress_streamed_file_payload = requested_streamed_file_format in {'json', 'xml'}" in chat_route_content,
-        'Expected only JSON/XML payloads to be withheld from the streamed assistant text.',
+        'Expected JSON/XML payload suppression to remain enabled for their existing artifact flow.',
+    )
+    assert_true(
+        '_supports_structured_csv_response(' in chat_route_content
+        and "requested_streamed_file_format in {'', 'csv'}" in chat_route_content,
+        'Expected optional structured CSV mode to be capability-gated in streamed chat.',
+    )
+    assert_true(
+        'parse_model_generated_csv_response(accumulated_content)' in chat_route_content,
+        'Expected streamed structured JSON to be parsed only after buffering completes.',
     )
 
 
@@ -1143,8 +1391,8 @@ def test_chat_route_wires_assistant_table_artifacts():
         'Expected workflow file exports to use the structured analysis reply when available.',
     )
     assert_true(
-        chat_route_content.count('build_generated_file_output_guidance(') == 2,
-        'Expected normal and streaming Chat to apply the same file-output guidance.',
+        chat_route_content.count('generated_file_output_guidance = build_generated_file_output_guidance(') == 2,
+        'Expected normal and streaming Chat to assign the shared file-output guidance.',
     )
     workflow_runner_content = read_text(WORKFLOW_RUNNER_FILE)
     generated_exports_content = read_text(GENERATED_EXPORTS_FILE)
@@ -1167,8 +1415,21 @@ def test_chat_route_wires_assistant_table_artifacts():
         'Expected workflows to pass current-turn action results to generated-file exports.',
     )
     assert_true(
-        'if not assistant_table_export_requested(user_question):' in generated_exports_content,
-        'Expected tabular output format detection to use the shared CSV/table intent predicate.',
+        chat_route_content.count('require_structured_csv_spec=True') >= 2,
+        'Expected direct chat finalizers to require model-declared CSV specs for assistant-derived files.',
+    )
+    assert_true(
+        'Render ordinary tables as Markdown in chat_response' in generated_exports_content
+        and 'MODEL_GENERATED_CSV_GUIDANCE' in chat_route_content,
+        'Expected structured response instructions to distinguish in-chat tables from CSV artifacts.',
+    )
+    assert_true(
+        "structured_csv_guidance_format in {'', 'csv'}" in chat_route_content,
+        'Expected normal table and explicit CSV chats to use structured output when supported.',
+    )
+    assert_true(
+        'if not assistant_csv_export_requested(user_question):' in generated_exports_content,
+        'Expected generated artifact format detection to require explicit CSV intent.',
     )
     assert_true(
         'return get_requested_structured_artifact_formats(user_question)' in tabular_orchestration_content,
@@ -1208,9 +1469,11 @@ def run_tests() -> bool:
         test_all_generated_csv_writers_neutralize_formulas,
         test_non_table_requests_do_not_create_exports,
         test_natural_table_request_phrase_is_recognized,
-        test_natural_csv_and_create_table_phrases_are_recognized,
+        test_natural_csv_and_spreadsheet_phrases_are_recognized,
         test_universal_csv_request_variants_are_recognized,
         test_csv_schema_clarification_guidance_is_specific_and_resumable,
+            test_model_generated_csv_response_is_validated,
+            test_structured_response_format_rejection_retries_as_plain_text,
         test_workflow_generated_file_artifacts_reuse_shared_contract,
         test_csv_artifact_card_appends_below_assistant_response,
         test_chat_route_wires_assistant_table_artifacts,

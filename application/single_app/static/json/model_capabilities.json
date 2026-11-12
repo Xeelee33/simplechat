@@ -1,8 +1,8 @@
 {
   "$schema": "https://simplechat.local/schemas/model-capabilities.schema.json",
   "schemaVersion": 3,
-  "lastUpdated": "2026-09-19",
-  "description": "SimpleChat model capability and token-capacity catalog. All 75 exact model IDs have explicit, independently evidenced limits or unknown/not-applicable dispositions; root values are publisher-native, with scoped hosting/protocol/version profiles.",
+  "lastUpdated": "2026-11-07",
+  "description": "SimpleChat model capability and token-capacity catalog. All 77 exact model IDs have explicit, independently evidenced limits or unknown/not-applicable dispositions; root values are publisher-native, with scoped hosting/protocol/version profiles.",
   "capabilityFields": {
     "processesText": "Accepts text input.",
     "generatesText": "Produces text output.",
@@ -19,7 +19,7 @@
     "supportsStreaming": "Supports incremental token streaming for chat responses. SimpleChat wraps models without streaming support so they still deliver through the stream.",
     "reasoning": "Performs extended reasoning or thinking before responding."
   },
-  "coverageNotes": ["OpenAI coverage starts at GPT-5.0 model families and includes Azure OpenAI GPT-5.x model IDs that SimpleChat commonly sees through Foundry.", "Claude coverage includes current, legacy, deprecated, and recently retired Claude models that fall within the requested two-year window.", "Meta coverage focuses on public Llama model families with clear model cards for text, vision, and coding support.", "xAI coverage includes Grok chat/coding models plus documented Imagine and Voice model SKUs.", "Microsoft coverage includes public Phi and MAI model cards with clear capability statements.", "Google coverage includes current, preview and historically retired Gemini API models; Vertex context and lifecycle qualifications remain host-scoped.", "Numeric capacities were verified against primary sources on 2026-09-19. Shared context, independent input, and output are distinct; missing maxima, adjustable defaults and configuration-only values are never fabricated into capacities.", "Legacy aliases, model IDs and qualitative capabilities remain compatible. Only verifiedAliases and exact IDs are appropriate for numeric matching; deployment labels and family/prefix heuristics are not evidence.", "Root limits describe publisher-native specifications or checkpoint capacity, not every hosting deployment. Apply generic host profiles before more specific protocol/version profiles; explicit null clears inherited capacity. Retired snapshots preserve historical evidence without asserting cross-host retirement."],
+  "coverageNotes": ["OpenAI coverage includes GPT-4o and GPT-4.1 structured-output support and GPT-5.0+ model families, including Azure OpenAI GPT-5.x model IDs commonly seen through Foundry.", "Claude coverage includes current, legacy, deprecated, and recently retired Claude models that fall within the requested two-year window.", "Meta coverage focuses on public Llama model families with clear model cards for text, vision, and coding support.", "xAI coverage includes Grok chat/coding models plus documented Imagine and Voice model SKUs.", "Microsoft coverage includes public Phi and MAI model cards with clear capability statements.", "Google coverage includes current, preview and historically retired Gemini API models; Vertex context and lifecycle qualifications remain host-scoped.", "Numeric capacities were verified against primary sources on 2026-09-19. Shared context, independent input, and output are distinct; missing maxima, adjustable defaults and configuration-only values are never fabricated into capacities.", "Legacy aliases, model IDs and qualitative capabilities remain compatible. Only verifiedAliases and exact IDs are appropriate for numeric matching; deployment labels and family/prefix heuristics are not evidence.", "Root limits describe publisher-native specifications or checkpoint capacity, not every hosting deployment. Apply generic host profiles before more specific protocol/version profiles; explicit null clears inherited capacity. Retired snapshots preserve historical evidence without asserting cross-host retirement."],
   "sources": [
     {
       "id": "openai-gpt5",
@@ -43,11 +43,32 @@
       "verifiedAt": "2026-09-19"
     },
     {
+      "id": "openai-gpt4o",
+      "provider": "openai",
+      "title": "OpenAI GPT-4o model documentation",
+      "url": "https://developers.openai.com/api/docs/models/gpt-4o",
+      "verifiedAt": "2026-11-07"
+    },
+    {
+      "id": "openai-gpt41",
+      "provider": "openai",
+      "title": "OpenAI GPT-4.1 model documentation",
+      "url": "https://developers.openai.com/api/docs/models/gpt-4.1",
+      "verifiedAt": "2026-11-07"
+    },
+    {
       "id": "azure-openai-gpt5",
       "provider": "microsoft",
       "title": "Azure OpenAI in Microsoft Foundry model catalog",
       "url": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure",
       "verifiedAt": "2026-09-19"
+    },
+    {
+      "id": "azure-structured-outputs",
+      "provider": "azure",
+      "title": "Azure OpenAI structured outputs supported models",
+      "url": "https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/structured-outputs",
+      "verifiedAt": "2026-11-07"
     },
     {
       "id": "anthropic-models",
@@ -3454,6 +3475,112 @@
           "notes": ["Historical Azure profile: the exact model ID is retired on Azure. Retention of specification evidence is not an availability claim."]
         }
       ]
+    },
+    {
+      "id": "gpt-4o",
+      "provider": "openai",
+      "displayName": "GPT-4o (2024-11-20)",
+      "aliases": [],
+      "family": "gpt-4o",
+      "lifecycle": "current",
+      "releaseDate": "2024-11-20",
+      "capabilities": {
+        "processesText": true,
+        "generatesText": true,
+        "processesImages": true,
+        "generatesImages": false,
+        "processesAudio": false,
+        "generatesAudio": false,
+        "processesVideo": false,
+        "generatesVideo": false,
+        "processesBinaryFiles": false,
+        "optimizedForCoding": false,
+        "toolCalling": true,
+        "structuredOutput": true,
+        "supportsStreaming": true,
+        "reasoning": false
+      },
+      "notes": ["Azure documents structured-output support for this GPT-4o version. The configured deployment alias is included for legacy Azure chat routing."],
+      "sourceIds": ["openai-gpt4o", "azure-structured-outputs"],
+      "contextWindow": null,
+      "inputTokenLimit": null,
+      "outputTokenLimit": null,
+      "verifiedAliases": [],
+      "tokenLimitsApplicability": "text",
+      "outputTokenAccounting": "unknown",
+      "tokenLimitEvidence": {
+        "contextWindow": {
+          "status": "unknown",
+          "sourceIds": ["azure-structured-outputs"],
+          "verifiedAt": "2026-11-07",
+          "note": "This source verifies structured-output support only; it does not establish token capacities for this version."
+        },
+        "inputTokenLimit": {
+          "status": "unknown",
+          "sourceIds": ["azure-structured-outputs"],
+          "verifiedAt": "2026-11-07",
+          "note": "This source verifies structured-output support only; it does not establish token capacities for this version."
+        },
+        "outputTokenLimit": {
+          "status": "unknown",
+          "sourceIds": ["azure-structured-outputs"],
+          "verifiedAt": "2026-11-07",
+          "note": "This source verifies structured-output support only; it does not establish token capacities for this version."
+        }
+      }
+    },
+    {
+      "id": "gpt-4.1",
+      "provider": "openai",
+      "displayName": "GPT-4.1 (2025-04-14)",
+      "aliases": [],
+      "family": "gpt-4.1",
+      "lifecycle": "current",
+      "releaseDate": "2025-04-14",
+      "capabilities": {
+        "processesText": true,
+        "generatesText": true,
+        "processesImages": true,
+        "generatesImages": false,
+        "processesAudio": false,
+        "generatesAudio": false,
+        "processesVideo": false,
+        "generatesVideo": false,
+        "processesBinaryFiles": false,
+        "optimizedForCoding": true,
+        "toolCalling": true,
+        "structuredOutput": true,
+        "supportsStreaming": true,
+        "reasoning": false
+      },
+      "notes": ["Azure documents structured-output support for this GPT-4.1 version. The configured deployment alias is included for legacy Azure chat routing."],
+      "sourceIds": ["openai-gpt41", "azure-structured-outputs"],
+      "contextWindow": null,
+      "inputTokenLimit": null,
+      "outputTokenLimit": null,
+      "verifiedAliases": [],
+      "tokenLimitsApplicability": "text",
+      "outputTokenAccounting": "unknown",
+      "tokenLimitEvidence": {
+        "contextWindow": {
+          "status": "unknown",
+          "sourceIds": ["azure-structured-outputs"],
+          "verifiedAt": "2026-11-07",
+          "note": "This source verifies structured-output support only; it does not establish token capacities for this version."
+        },
+        "inputTokenLimit": {
+          "status": "unknown",
+          "sourceIds": ["azure-structured-outputs"],
+          "verifiedAt": "2026-11-07",
+          "note": "This source verifies structured-output support only; it does not establish token capacities for this version."
+        },
+        "outputTokenLimit": {
+          "status": "unknown",
+          "sourceIds": ["azure-structured-outputs"],
+          "verifiedAt": "2026-11-07",
+          "note": "This source verifies structured-output support only; it does not establish token capacities for this version."
+        }
+      }
     },
     {
       "id": "claude-fable-5",

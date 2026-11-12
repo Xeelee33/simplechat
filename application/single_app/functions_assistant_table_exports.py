@@ -153,15 +153,19 @@ CSV_EXPLICIT_ROW_SCHEMA_PATTERNS = (
     re.compile(r'\b(?:columns?|fields?)\s*(?::|=|are|should|must|include|with)\b'),
     re.compile(r'\b(?:include|with|using)\s+(?:the\s+)?(?:columns?|fields?)\b'),
 )
+CSV_SYNTHETIC_DATA_REQUEST_PATTERN = re.compile(
+    r'\b(?:generate|create|make|produce|invent|write|provide)\b.{0,100}'
+    r'\b(?:synthetic|sample|example|dummy|mock|fake|test)\b.{0,100}'
+    r'\b(?:data|records?|rows?|entries|sales)\b'
+)
 
-def assistant_table_export_requested(user_question: str) -> bool:
-    """Return True when the user asked for table-shaped output or a CSV export."""
+def assistant_csv_export_requested(user_question: str) -> bool:
+    """Return True only when the user explicitly requested a CSV or spreadsheet artifact."""
     normalized_question = re.sub(r'\s+', ' ', str(user_question or '').strip().casefold())
     if not normalized_question:
         return False
 
     csv_markers = tuple(marker for marker in TABLE_EXPORT_REQUEST_MARKERS if 'csv' in marker)
-    table_markers = tuple(marker for marker in TABLE_EXPORT_REQUEST_MARKERS if 'csv' not in marker)
     question_clauses = [
         clause.strip()
         for clause in re.split(r'[;.!?]+', normalized_question)
@@ -172,7 +176,8 @@ def assistant_table_export_requested(user_question: str) -> bool:
         if 'csv' not in question_clause:
             continue
         csv_request_negated = bool(re.search(
-            r"\b(?:do\s+not|don't|dont|never)\b.{0,80}\bcsv\b"
+            r"\b(?:do\s+not|don't|dont|didn't|did\s+not|never)\b"
+            r".{0,80}\b(?:want|need|make|create|generate|export)?\b.{0,80}\bcsv\b"
             r'|\b(?:not|no|without)\s+(?:a\s+)?csv\b',
             question_clause,
         ))
@@ -183,22 +188,38 @@ def assistant_table_export_requested(user_question: str) -> bool:
         if any(pattern.search(question_clause) for pattern in CSV_OUTPUT_REQUEST_PATTERNS):
             return True
 
-    return (
-        any(marker in normalized_question for marker in table_markers)
-        or any(
-            pattern.search(normalized_question)
-            for pattern in CSV_OUTPUT_REQUEST_PATTERNS
-            if 'spreadsheet' in pattern.pattern
-        )
+    return any(
+        pattern.search(normalized_question)
+        for pattern in CSV_OUTPUT_REQUEST_PATTERNS
+        if 'spreadsheet' in pattern.pattern
+    )
+
+
+def assistant_table_export_requested(user_question: str) -> bool:
+    """Return True when the user asked for table-shaped output or a CSV export."""
+    normalized_question = re.sub(r'\s+', ' ', str(user_question or '').strip().casefold())
+    if not normalized_question:
+        return False
+    table_markers = tuple(marker for marker in TABLE_EXPORT_REQUEST_MARKERS if 'csv' not in marker)
+    return assistant_csv_export_requested(user_question) or any(
+        marker in normalized_question for marker in table_markers
     )
 
 
 def build_csv_output_clarification_guidance(user_question: str) -> str:
     """Return model guidance for a CSV request that may need one schema clarification."""
-    if not assistant_table_export_requested(user_question):
+    if not assistant_csv_export_requested(user_question):
         return ''
 
     normalized_question = re.sub(r'\s+', ' ', str(user_question or '').strip().casefold())
+    if CSV_SYNTHETIC_DATA_REQUEST_PATTERN.search(normalized_question):
+        return (
+            'The user explicitly requested new synthetic/example data. Generate the requested rows using '
+            'the specified columns and values; do not require retrieval evidence or reuse unrelated prior data. '
+            'If the row unit or schema is still unclear, ask exactly one concise clarification. Otherwise, '
+            'return the complete valid CSV in a fenced csv block. Do not claim the downloadable artifact is '
+            'published until the server confirms it.'
+        )
     if any(pattern.search(normalized_question) for pattern in CSV_EXPLICIT_ROW_SCHEMA_PATTERNS):
         return (
             'The user explicitly specified CSV row or column structure. Preserve that structure, '
@@ -218,7 +239,7 @@ def build_csv_output_clarification_guidance(user_question: str) -> str:
 
 def build_assistant_table_csv_export(user_question: str, assistant_content: str) -> Optional[Dict[str, Any]]:
     """Build CSV export metadata from the largest table found in the assistant response."""
-    if not assistant_table_export_requested(user_question):
+    if not assistant_csv_export_requested(user_question):
         return None
 
     table_rows = extract_assistant_table_entries(assistant_content)
@@ -276,6 +297,85 @@ def extract_assistant_table_entries(assistant_content: str) -> List[Dict[str, st
         _extract_comma_separated_table_entries(normalized_content),
     ]
     return max(candidates, key=len, default=[])
+
+
+def extract_unambiguous_assistant_table_entries(
+    assistant_content: str,
+) -> Optional[List[Dict[str, str]]]:
+    """Return the only recognizable table, or None when multiple tables are plausible."""
+    normalized_content = str(assistant_content or '').replace('\r\n', '\n').replace('\r', '\n')
+    if not normalized_content.strip():
+        return []
+
+    fenced_candidates = []
+    explicit_csv_candidates = []
+    for fenced_block in _iter_markdown_fenced_blocks(normalized_content):
+        if fenced_block['language'] not in CSV_FENCE_LANGUAGES:
+            continue
+        parsed_candidates = _parse_csv_table_candidates(fenced_block['body'], trusted=True)
+        fenced_candidates.extend(parsed_candidates)
+        if fenced_block['language'] in {'csv', 'text/csv'}:
+            explicit_csv_candidates.extend(parsed_candidates)
+    if explicit_csv_candidates:
+        return explicit_csv_candidates[0] if len(explicit_csv_candidates) == 1 else None
+    if fenced_candidates:
+        return fenced_candidates[0] if len(fenced_candidates) == 1 else None
+
+    markdown_candidates = _extract_delimited_table_candidates(normalized_content, '|')
+    if markdown_candidates:
+        return markdown_candidates[0] if len(markdown_candidates) == 1 else None
+
+    tab_candidates = _extract_delimited_table_candidates(normalized_content, '\t')
+    if tab_candidates:
+        return tab_candidates[0] if len(tab_candidates) == 1 else None
+
+    unfenced_sections = []
+    previous_end = 0
+    for fenced_block in _iter_markdown_fenced_blocks(normalized_content):
+        unfenced_sections.append(normalized_content[previous_end:fenced_block['start']])
+        previous_end = fenced_block['end']
+    unfenced_sections.append(normalized_content[previous_end:])
+    csv_candidates = [
+        candidate
+        for section in unfenced_sections
+        for candidate in _parse_csv_table_candidates(section, trusted=False)
+    ]
+    return csv_candidates[0] if len(csv_candidates) == 1 else (None if csv_candidates else [])
+
+
+def _extract_delimited_table_candidates(content: str, delimiter: str) -> List[List[Dict[str, str]]]:
+    candidates = []
+    lines = str(content or '').split('\n')
+    index = 0
+    while index < len(lines):
+        is_candidate_line = (
+            _is_markdown_table_line(lines[index])
+            if delimiter == '|'
+            else _is_tab_separated_table_line(lines[index])
+        )
+        if not is_candidate_line:
+            index += 1
+            continue
+
+        table_block = []
+        while index < len(lines):
+            is_candidate_line = (
+                _is_markdown_table_line(lines[index])
+                if delimiter == '|'
+                else _is_tab_separated_table_line(lines[index])
+            )
+            if not is_candidate_line:
+                break
+            table_block.append(lines[index])
+            index += 1
+        parsed_table = (
+            _parse_markdown_table_block(table_block)
+            if delimiter == '|'
+            else _parse_delimited_table_block(table_block, delimiter)
+        )
+        if parsed_table:
+            candidates.append(parsed_table)
+    return candidates
 
 
 def build_assistant_table_csv(table_rows: List[Dict[str, Any]]) -> str:

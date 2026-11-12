@@ -521,6 +521,7 @@ def test_direct_preflight_uses_planner_action_mode_for_parity_events():
         "classify_tabular_parity_request": lambda prompt: {"execution_contract": "combined"},
         "emit_tabular_parity_event": lambda settings, event_name, mode, **kwargs: parity_modes.append(mode),
         "_build_direct_tabular_generated_output_source": lambda *args, **kwargs: None,
+        "get_tabular_generated_output_format": lambda prompt: None,
         "logging": logging,
     }
     exec(compile(ast.Module(body=[function_node], type_ignores=[]), CHAT_ROUTE, "exec"), namespace)

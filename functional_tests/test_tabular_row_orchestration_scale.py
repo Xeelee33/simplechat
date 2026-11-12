@@ -542,6 +542,9 @@ def _load_generated_output_router(route_dependencies):
         and node.name == 'maybe_create_tabular_generated_output'
     )
     namespace = dict(route_dependencies)
+    async def confirm_csv(*args, **kwargs):
+        return True
+    namespace.setdefault('_confirm_tabular_csv_output', confirm_csv)
     namespace.setdefault('TABULAR_RUN_TASK_HIERARCHICAL_ANALYSIS', 'hierarchical_analysis')
     namespace.setdefault('TABULAR_RUN_TASK_COMBINED', 'combined')
     namespace.setdefault(
@@ -575,6 +578,9 @@ def _load_direct_source_queue_helpers(route_dependencies):
         raise AssertionError('Missing direct source-backed queue helper implementation')
 
     namespace = dict(route_dependencies)
+    async def confirm_csv(*args, **kwargs):
+        return True
+    namespace.setdefault('_confirm_tabular_csv_output', confirm_csv)
     namespace.setdefault('TABULAR_RUN_TASK_HIERARCHICAL_ANALYSIS', 'hierarchical_analysis')
     namespace.setdefault('TABULAR_RUN_TASK_COMBINED', 'combined')
     namespace.setdefault('TABULAR_EXTENSIONS', {'csv', 'xlsx', 'xls', 'xlsm'})
@@ -587,7 +593,7 @@ def _load_direct_source_queue_helpers(route_dependencies):
     namespace.setdefault('math', math)
     namespace.setdefault('os', os)
     namespace.setdefault('inspect', SimpleNamespace(isawaitable=lambda value: False))
-    namespace.setdefault('asyncio', SimpleNamespace(run=lambda value: value))
+    namespace.setdefault('asyncio', asyncio)
     namespace.setdefault('MixedSourceCancellationError', type('MixedSourceCancellationError', (Exception,), {}))
     extracted_module = ast.Module(body=selected_nodes, type_ignores=[])
     exec(compile(extracted_module, str(CHAT_ROUTE), 'exec'), namespace)

@@ -7,6 +7,10 @@ from pydantic import Field
 from semantic_kernel.agents import ChatCompletionAgent
 from semantic_kernel.const import DEFAULT_SERVICE_NAME
 from semantic_kernel.functions import KernelArguments
+from semantic_kernel.connectors.ai.function_choice_behavior import FunctionChoiceBehavior
+from semantic_kernel.connectors.ai.prompt_execution_settings import PromptExecutionSettings
+from semantic_kernel.contents import ChatMessageContent, StreamingChatMessageContent
+from functions_generated_file_exports import prepare_model_csv_response, decode_model_csv_response
 from functions_m365_agent_continuation import (
     m365_agent_continuation,
     m365_agent_stream_continuation,
@@ -19,6 +23,7 @@ import re
 
 
 class LoggingChatCompletionAgent(ChatCompletionAgent):
+    supports_csv_response: bool = Field(default=True)
     display_name: str | None = Field(default=None)
     default_agent: bool = Field(default=False)
     is_global: bool = Field(default=False)
@@ -193,8 +198,63 @@ class LoggingChatCompletionAgent(ChatCompletionAgent):
         """
         return []  # Plugin invocation logger handles this now
 
+    def _prepare_csv_invocation(self, args, kwargs):
+        enabled = kwargs.pop('csv_response', False)
+        response_only = kwargs.pop('csv_response_only', False)
+        if not enabled:
+            return args, kwargs, False
+        arguments = self._merge_arguments(kwargs.get('arguments'))
+        settings = arguments.execution_settings
+        if response_only:
+            if not settings:
+                service_id = self.service.service_id if self.service is not None else DEFAULT_SERVICE_NAME
+                settings = {service_id: PromptExecutionSettings(service_id=service_id)}
+            for setting in settings.values():
+                setting.function_choice_behavior = FunctionChoiceBehavior.NoneInvoke()
+            kwargs['arguments'] = KernelArguments(settings=settings, **dict(arguments))
+        if any(
+            getattr(setting, 'response_format', None) or setting.extension_data.get('response_format')
+            for setting in (settings or {}).values()
+        ):
+            return args, kwargs, False
+        original_messages = args[0] if args else kwargs.get('messages', [])
+        if isinstance(original_messages, str):
+            original_messages = [{'role': 'user', 'content': original_messages}]
+        elif isinstance(original_messages, ChatMessageContent):
+            original_messages = [original_messages]
+        messages = [
+            dict(message) if isinstance(message, dict) else {
+                'role': getattr(message.role, 'value', message.role),
+                'content': message.content,
+            }
+            for message in original_messages
+        ]
+        response_format = prepare_model_csv_response(messages, self.deployment_name)
+        prepared_messages = [
+            ChatMessageContent(**message) if isinstance(message, dict) else message
+            for message in original_messages
+        ]
+        if len(messages) > len(prepared_messages):
+            prepared_messages.insert(0, ChatMessageContent(**messages[0]))
+        if args:
+            args = (prepared_messages, *args[1:])
+        else:
+            kwargs['messages'] = prepared_messages
+        if response_format:
+            if not settings:
+                service_id = self.service.service_id if self.service is not None else DEFAULT_SERVICE_NAME
+                settings = {service_id: PromptExecutionSettings(service_id=service_id)}
+            for setting in settings.values():
+                if hasattr(setting, 'response_format'):
+                    setting.response_format = response_format
+                else:
+                    setting.extension_data['response_format'] = response_format
+            kwargs['arguments'] = KernelArguments(settings=settings, **dict(arguments))
+        return args, kwargs, bool(response_format)
+
     @m365_agent_continuation
     async def invoke(self, *args, **kwargs):
+        args, kwargs, csv_response = self._prepare_csv_invocation(args, kwargs)
         # Clear previous tool invocations
         self.tool_invocations = []
         
@@ -253,6 +313,15 @@ class LoggingChatCompletionAgent(ChatCompletionAgent):
             # Simplified citation capture - primary citations come from plugin invocation logger
             self._capture_tool_invocations_simplified(args, response)
             
+            if csv_response:
+                visible_text, file_spec = decode_model_csv_response(str(response or ''))
+                return ChatMessageContent(
+                    role='assistant',
+                    content=visible_text,
+                    ai_model_id=getattr(response, 'ai_model_id', None),
+                    inner_content=getattr(response, 'inner_content', None),
+                    metadata={**(getattr(response, 'metadata', None) or {}), 'csv_file_spec': file_spec},
+                )
             return response
         finally:
             usage = getattr(response, "usage", None)
@@ -271,9 +340,24 @@ class LoggingChatCompletionAgent(ChatCompletionAgent):
     
     @m365_agent_stream_continuation
     async def invoke_stream(self, *args, **kwargs):
+        args, kwargs, csv_response = self._prepare_csv_invocation(args, kwargs)
+        response_parts = []
+        response_metadata = {}
         async with aclosing(super().invoke_stream(*args, **kwargs)) as stream:
             async for response in stream:
-                yield response
+                if not csv_response:
+                    yield response
+                    continue
+                response_parts.append(str(response.content or ''))
+                response_metadata.update(getattr(response, 'metadata', None) or {})
+        if csv_response:
+            visible_text, file_spec = decode_model_csv_response(''.join(response_parts))
+            yield StreamingChatMessageContent(
+                choice_index=0,
+                role='assistant',
+                content=visible_text,
+                metadata={**response_metadata, 'csv_file_spec': file_spec},
+            )
 
     def _capture_tool_invocations_simplified(self, args, response):
         """

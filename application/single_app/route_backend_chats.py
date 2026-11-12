@@ -32,7 +32,11 @@ from model_endpoint_clients import (
     normalize_chat_completion_text,
 )
 from functions_model_endpoint_identity_header import build_model_endpoint_identity_headers
-from functions_model_capabilities import ModelTokenBudgetError
+from functions_model_capabilities import (
+    CAPABILITY_STRUCTURED_OUTPUT,
+    ModelTokenBudgetError,
+    resolve_model_capability,
+)
 from functions_fact_memory_autosave import (
     run_fact_memory_autosave,
     should_run_fact_memory_autosave,
@@ -166,20 +170,26 @@ from functions_assistant_table_exports import (
     neutralize_csv_spreadsheet_formula,
 )
 from functions_generated_file_exports import (
+    MODEL_GENERATED_CSV_GUIDANCE,
+    MODEL_UNSTRUCTURED_CSV_GUIDANCE,
+    build_model_generated_csv_response_format,
     build_generated_file_artifact_metadata,
     build_generated_file_export,
     build_generated_file_output_guidance,
     build_structured_artifact_rows_payload,
+    extract_model_generated_chat_response,
     evaluate_generated_file_passthrough_eligibility,
     estimate_function_result_row_count,
     get_generated_file_export_content,
     get_requested_generated_file_format,
     get_requested_structured_artifact_format,
     has_generated_file_output,
+    normalize_link_only_csv_handoff,
     normalize_complete_xml_artifact_payload,
     normalize_json_artifact_payload,
     normalize_generated_output_format,
     normalize_xml_artifact_payload,
+    parse_model_generated_csv_response,
     resolve_pending_generated_file_format,
     select_prior_turn_action_citations,
     serialize_generated_json,
@@ -2382,6 +2392,22 @@ def _has_generated_tabular_csv_output(generated_outputs):
     return has_generated_tabular_csv_output(generated_outputs)
 
 
+def _normalize_csv_artifact_handoff(assistant_content, user_question, generated_outputs):
+    requested_format = get_requested_generated_file_format(user_question)
+    csv_metadata = next((
+        output
+        for output in generated_outputs or []
+        if isinstance(output, dict)
+        and (
+            str(output.get('output_format') or '').strip().lower() == 'csv'
+            or str(output.get('file_name') or '').strip().lower().endswith('.csv')
+        )
+    ), None)
+    if requested_format != 'csv' and csv_metadata is None:
+        return assistant_content
+    return normalize_link_only_csv_handoff(assistant_content, csv_metadata)
+
+
 PRIOR_TURN_ACTION_RESULT_MAX_MESSAGES = 40
 PRIOR_TURN_ACTION_RESULT_ARTIFACT_LIMIT = 25
 
@@ -2397,18 +2423,30 @@ def _resolve_prior_turn_history_window(settings=None):
     )
 
 
-def _read_recent_assistant_messages(conversation_id, message_limit):
+def _read_recent_assistant_messages(
+    conversation_id,
+    message_limit,
+    before_timestamp=None,
+    excluded_message_id=None,
+):
     query = (
-        f'SELECT TOP {int(message_limit)} c.id, c.content, c.agent_citations FROM c '
+        f'SELECT TOP {int(message_limit)} c.id, c.content, c.agent_citations, c.timestamp, c.metadata FROM c '
         'WHERE c.conversation_id = @conversation_id AND c.role = @role '
-        'ORDER BY c.timestamp DESC'
     )
+    parameters = [
+        {'name': '@conversation_id', 'value': conversation_id},
+        {'name': '@role', 'value': 'assistant'},
+    ]
+    if before_timestamp:
+        query += 'AND c.timestamp < @before_timestamp '
+        parameters.append({'name': '@before_timestamp', 'value': before_timestamp})
+    if excluded_message_id:
+        query += 'AND c.id != @excluded_message_id '
+        parameters.append({'name': '@excluded_message_id', 'value': excluded_message_id})
+    query += 'ORDER BY c.timestamp DESC'
     return list(cosmos_messages_container.query_items(
         query=query,
-        parameters=[
-            {'name': '@conversation_id', 'value': conversation_id},
-            {'name': '@role', 'value': 'assistant'},
-        ],
+        parameters=parameters,
         partition_key=conversation_id,
     ))
 
@@ -2458,23 +2496,147 @@ def _load_prior_turn_function_results(user_id, conversation_id, settings=None):
                 if str(citation.get('artifact_id') or '').strip()
             ],
         )
+        return [
+            artifact_payload_map.get(str(citation.get('artifact_id') or ''), {}).get('citation')
+            or citation
+            for citation in selected_citations
+        ]
+    except Exception as exc:
+        log_event(
+            '[GENERATED_FILE_EXPORT] Could not reuse earlier action results',
+            {
+                'conversation_id': normalized_conversation_id,
+                'error_type': type(exc).__name__,
+            },
+            debug_only=True,
+        )
+        return []
 
+
+def _build_prior_turn_source_loaders(
+    user_id,
+    conversation_id,
+    current_user_message_id,
+    current_assistant_message_id,
+    settings=None,
+):
+    """Build lazy, request-local loaders sharing one authorized bounded history snapshot."""
+    normalized_user_id = str(user_id or '').strip()
+    normalized_conversation_id = str(conversation_id or '').strip()
+    normalized_user_message_id = str(current_user_message_id or '').strip()
+    normalized_assistant_message_id = str(current_assistant_message_id or '').strip()
+    history_cache = {}
+
+    def load_history():
+        if 'assistant_messages' in history_cache:
+            return history_cache['assistant_messages']
+        if not normalized_user_id or not normalized_conversation_id or not normalized_user_message_id:
+            history_cache['assistant_messages'] = []
+            return []
+
+        try:
+            _authorize_personal_conversation_access(normalized_user_id, normalized_conversation_id)
+            user_message = cosmos_messages_container.read_item(
+                item=normalized_user_message_id,
+                partition_key=normalized_conversation_id,
+            )
+        except Exception:
+            history_cache['assistant_messages'] = []
+            history_cache['reuse_blocked'] = True
+            raise
+        if (
+            not isinstance(user_message, dict)
+            or user_message.get('role') != 'user'
+            or user_message.get('conversation_id') != normalized_conversation_id
+            or not str(user_message.get('timestamp') or '').strip()
+        ):
+            history_cache['assistant_messages'] = []
+            return []
+        history_cache['assistant_messages'] = _read_recent_assistant_messages(
+            normalized_conversation_id,
+            _resolve_prior_turn_history_window(settings),
+            before_timestamp=user_message.get('timestamp'),
+            excluded_message_id=normalized_assistant_message_id,
+        )
+        return history_cache['assistant_messages']
+
+    def hydrate_citations(selected_citations):
+        if not selected_citations:
+            return []
+        artifact_payload_map = _read_agent_citation_artifact_payloads(
+            normalized_conversation_id,
+            [
+                str(citation.get('artifact_id') or '').strip()
+                for citation in selected_citations
+                if str(citation.get('artifact_id') or '').strip()
+            ],
+        )
         resolved_citations = []
         for citation in selected_citations:
             artifact_payload = artifact_payload_map.get(str(citation.get('artifact_id') or ''))
             stored_citation = artifact_payload.get('citation') if isinstance(artifact_payload, dict) else None
             resolved_citations.append(stored_citation if isinstance(stored_citation, dict) else citation)
         return resolved_citations
-    except Exception as exc:
-        log_event(
-            '[GENERATED_FILE_EXPORT] Could not reuse earlier action results',
-            {
-                'conversation_id': normalized_conversation_id,
-                'error': str(exc),
-            },
-            debug_only=True,
-        )
-    return []
+
+    def load_prior_assistant_source():
+        try:
+            assistant_messages = load_history()
+            if not assistant_messages:
+                return None
+            nearest_message = assistant_messages[0]
+            metadata = nearest_message.get('metadata')
+            metadata = metadata if isinstance(metadata, dict) else {}
+            message_status = str(metadata.get('status') or nearest_message.get('status') or '').strip().lower()
+            if (
+                metadata.get('incomplete') is True
+                or metadata.get('error')
+                or message_status in {'failed', 'error', 'canceled', 'cancelled', 'interrupted'}
+            ):
+                return {
+                    'id': str(nearest_message.get('id') or ''),
+                    'content': '',
+                    'timestamp': nearest_message.get('timestamp'),
+                    'function_results': [],
+                    'reuse_blocked': True,
+                }
+            selected_citations = select_prior_turn_action_citations(
+                [nearest_message],
+            )[:PRIOR_TURN_ACTION_RESULT_ARTIFACT_LIMIT]
+            return {
+                'id': str(nearest_message.get('id') or ''),
+                'content': str(nearest_message.get('content') or ''),
+                'timestamp': nearest_message.get('timestamp'),
+                'function_results': hydrate_citations(selected_citations),
+            }
+        except Exception as exc:
+            log_event(
+                '[GENERATED_FILE_EXPORT] Could not reuse prior assistant source',
+                {
+                    'conversation_id': normalized_conversation_id,
+                    'error_type': type(exc).__name__,
+                },
+                debug_only=True,
+            )
+            return {'reuse_blocked': True}
+
+    def load_prior_function_results():
+        try:
+            selected_citations = select_prior_turn_action_citations(
+                load_history(),
+            )[:PRIOR_TURN_ACTION_RESULT_ARTIFACT_LIMIT]
+            return hydrate_citations(selected_citations)
+        except Exception as exc:
+            log_event(
+                '[GENERATED_FILE_EXPORT] Could not reuse earlier action results',
+                {
+                    'conversation_id': normalized_conversation_id,
+                    'error_type': type(exc).__name__,
+                },
+                debug_only=True,
+            )
+            return []
+
+    return load_prior_assistant_source, load_prior_function_results
 
 
 def _resolve_pending_generated_file_format(user_question, conversation_id, user_id):
@@ -2503,6 +2665,92 @@ def _resolve_generated_file_guidance_format(user_question, conversation_id, user
     return str(pending_format or '').strip().lower()
 
 
+def _supports_structured_csv_response(model, model_id, provider, endpoint):
+    """Use structured CSV output only for declared-capable OpenAI-compatible models."""
+    try:
+        protocol = infer_model_endpoint_protocol(provider, endpoint, model)
+    except (TypeError, ValueError):
+        return False
+    if protocol not in {MODEL_ENDPOINT_PROTOCOL_AZURE_OPENAI, MODEL_ENDPOINT_PROTOCOL_OPENAI_STYLE}:
+        return False
+    return any(
+        resolve_model_capability(
+            CAPABILITY_STRUCTURED_OUTPUT,
+            model_identifier,
+            default=False,
+        ) is True
+        for model_identifier in (model, model_id)
+        if model_identifier
+    )
+
+
+def _create_chat_completion_with_response_format_fallback(client, api_params):
+    """Retry without structured output only when the endpoint rejects that parameter."""
+    try:
+        return client.chat.completions.create(**api_params)
+    except Exception as exc:
+        error_text = str(exc).lower()
+        response_format_rejected = (
+            'response_format' in error_text or 'json_schema' in error_text
+        ) and any(
+            marker in error_text
+            for marker in ('not support', 'unsupported', 'unrecognized', 'invalid', 'unknown')
+        )
+        if 'response_format' not in api_params or not response_format_rejected:
+            raise
+        api_params.pop('response_format', None)
+        request_messages = api_params.get('messages')
+        if isinstance(request_messages, list):
+            request_messages[:] = [
+                message for message in request_messages
+                if not (
+                    isinstance(message, dict)
+                    and message.get('role') == 'system'
+                    and str(message.get('content') or '').startswith(
+                        'Return a concise user-facing answer in chat_response.'
+                    )
+                )
+            ]
+            _append_unstructured_csv_response_guidance(request_messages)
+        return client.chat.completions.create(**api_params)
+
+
+def _replace_chat_system_guidance(messages, guidance_to_remove, guidance_to_add):
+    if not messages or messages[-1].get('role') != 'user':
+        return
+    if guidance_to_remove:
+        messages[:] = [
+            message for message in messages
+            if not (
+                isinstance(message, dict)
+                and message.get('role') == 'system'
+                and message.get('content') == guidance_to_remove
+            )
+        ]
+    messages.insert(len(messages) - 1, {
+        'role': 'system',
+        'content': guidance_to_add,
+    })
+
+
+def _append_structured_csv_response_guidance(messages, guidance_to_remove=None):
+    """Explain how the strict CSV response schema maps to user intent and trusted evidence."""
+    _replace_chat_system_guidance(
+        messages,
+        guidance_to_remove,
+        MODEL_GENERATED_CSV_GUIDANCE,
+    )
+
+
+def _append_unstructured_csv_response_guidance(messages, guidance_to_remove=None):
+    """Keep providers without structured output from implying that text creates a file."""
+    _replace_chat_system_guidance(
+        messages,
+        guidance_to_remove,
+        MODEL_UNSTRUCTURED_CSV_GUIDANCE,
+    )
+
+
 def maybe_create_generated_file_output(
     user_question,
     assistant_content,
@@ -2511,6 +2759,10 @@ def maybe_create_generated_file_output(
     existing_outputs=None,
     cancel_requested=None,
     request_correlation_id=None,
+    current_user_message_id=None,
+    current_assistant_message_id=None,
+    structured_csv_spec=None,
+    require_structured_csv_spec=True,
 ):
     """Save a requested CSV, DOCX, or PDF artifact from response and action evidence."""
     raise_if_mixed_source_cancelled(
@@ -2518,13 +2770,20 @@ def maybe_create_generated_file_output(
         'artifact_publication',
         request_correlation_id=request_correlation_id,
     )
-    output_format = get_requested_generated_file_format(user_question)
+    requested_output_format = get_requested_generated_file_format(user_question)
+    pending_output_format = None
+    output_format = requested_output_format
     if not output_format:
-        output_format = _resolve_pending_generated_file_format(
+        pending_output_format = _resolve_pending_generated_file_format(
             user_question,
             conversation_id,
             get_current_user_id(),
         )
+        output_format = pending_output_format
+    if isinstance(structured_csv_spec, dict):
+        output_format = 'csv'
+    elif output_format == 'csv':
+        return None
     if not output_format:
         return None
     if output_format == 'csv' and _has_generated_tabular_csv_output(existing_outputs):
@@ -2532,16 +2791,22 @@ def maybe_create_generated_file_output(
     if has_generated_file_output(existing_outputs, output_format):
         return None
 
+    prior_assistant_source_loader, prior_function_results_loader = _build_prior_turn_source_loaders(
+        get_current_user_id(),
+        conversation_id,
+        current_user_message_id,
+        current_assistant_message_id,
+        settings=get_settings(),
+    )
     export_payload = build_generated_file_export(
         user_question,
         assistant_content,
         function_results=function_results,
-        prior_function_results_loader=lambda: _load_prior_turn_function_results(
-            get_current_user_id(),
-            conversation_id,
-            settings=get_settings(),
-        ),
+        prior_function_results_loader=prior_function_results_loader,
         pending_output_format=output_format,
+        prior_assistant_source_loader=prior_assistant_source_loader,
+        structured_csv_spec=structured_csv_spec,
+        require_structured_csv_spec=require_structured_csv_spec,
     )
     if not export_payload:
         return None
@@ -2761,7 +3026,7 @@ def _build_assistant_file_output_handoff(output_metadata):
 
 def _build_streaming_assistant_file_status(output_format):
     normalized_output_format = str(output_format or '').strip().upper()
-    if normalized_output_format not in {'JSON', 'XML'}:
+    if normalized_output_format not in {'CSV', 'JSON', 'XML'}:
         return ''
     return f'Generating the {normalized_output_format} file. It will appear here when ready.'
 
@@ -6232,6 +6497,53 @@ def _build_tabular_generated_output_query_descriptor(
     return descriptor
 
 
+async def _confirm_tabular_csv_output(user_question, gpt_model, settings, model_context=None):
+    """Require a structured model declaration before starting source-backed CSV work."""
+    model_id = (model_context or {}).get('model_id')
+    if not any(
+        resolve_model_capability(CAPABILITY_STRUCTURED_OUTPUT, identifier, default=False) is True
+        for identifier in (gpt_model, model_id) if identifier
+    ):
+        return False
+    try:
+        chat_service, protocol = build_semantic_kernel_chat_service_for_model(
+            gpt_model, settings, service_id='tabular-csv-declaration', model_context=model_context,
+        )
+        if protocol not in {MODEL_ENDPOINT_PROTOCOL_AZURE_OPENAI, MODEL_ENDPOINT_PROTOCOL_OPENAI_STYLE}:
+            return False
+        history = ChatHistory()
+        history.add_system_message(
+            'Decide whether the request asks for a downloadable CSV file. Return files=[] for an '
+            'in-chat table, analysis of a CSV input, a clarification, or a request without a CSV '
+            'download. Declare exactly one CSV only when the user requests that deliverable. '
+            'Do not generate data, use tools, or infer file intent from a source filename.'
+        )
+        history.add_user_message(str(user_question or ''))
+        execution_settings = PromptExecutionSettings(extension_data={'response_format': {
+            'type': 'json_schema',
+            'json_schema': {
+                'name': 'simplechat_csv_deliverable', 'strict': True,
+                'schema': {
+                    'type': 'object', 'additionalProperties': False, 'required': ['files'],
+                    'properties': {'files': {'type': 'array', 'items': {
+                        'type': 'object', 'additionalProperties': False, 'required': ['format'],
+                        'properties': {'format': {'type': 'string', 'enum': ['csv']}},
+                    }}},
+                },
+            },
+        }})
+        responses = await chat_service.get_chat_message_contents(history, execution_settings)
+        declaration = json.loads(responses[0].content) if responses else None
+        return declaration == {'files': [{'format': 'csv'}]}
+    except Exception as exc:
+        log_event(
+            '[TABULAR_GENERATED_OUTPUT] CSV declaration unavailable',
+            extra={'exception_type': type(exc).__name__},
+            level=logging.WARNING,
+        )
+        return False
+
+
 def _build_direct_tabular_generated_output_source(
     user_question,
     file_contexts,
@@ -6242,7 +6554,12 @@ def _build_direct_tabular_generated_output_source(
     planner_metadata=None,
 ):
     """Build a replayable full-tabular source descriptor without requiring a prior tool page."""
+    declared_format = str((planner_metadata or {}).get('output_format') or '').strip().lower()
+    if (get_tabular_generated_output_format(user_question) == 'csv' or declared_format == 'csv') and (planner_metadata or {}).get('csv_model_declared') is not True:
+        return None
     generated_output_requested = question_requests_tabular_generated_output(user_question)
+    if declared_format == 'csv':
+        generated_output_requested = True
     hierarchical_analysis_requested = question_requests_tabular_hierarchical_analysis(user_question)
     exhaustive_row_output_requested = question_requests_tabular_exhaustive_row_output(user_question)
     durable_task_type = _get_tabular_generated_output_task_type(
@@ -6499,6 +6816,11 @@ def maybe_queue_direct_tabular_generated_output(
         metrics={'source_count': len(file_contexts or [])},
     )
     try:
+        if get_tabular_generated_output_format(user_question) == 'csv' or (planner_metadata or {}).get('output_format') == 'csv':
+            csv_declared = asyncio.run(_confirm_tabular_csv_output(user_question, gpt_model, settings, model_context))
+            if not csv_declared:
+                return None
+            planner_metadata = {**(planner_metadata or {}), 'output_format': 'csv', 'csv_model_declared': True}
         direct_source = _build_direct_tabular_generated_output_source(
             user_question,
             file_contexts,
@@ -7377,6 +7699,9 @@ async def maybe_create_tabular_generated_output(
     mode='search',
 ):
     """Build, upload, or queue generated tabular exports and analysis artifacts when requested."""
+    if get_tabular_generated_output_format(user_question) == 'csv':
+        if not await _confirm_tabular_csv_output(user_question, gpt_model, settings, model_context):
+            return None
     raise_if_mixed_source_cancelled(
         cancel_requested,
         'export',
@@ -16195,6 +16520,9 @@ def register_route_backend_chats(bp):
                     existing_outputs=document_generated_analysis_artifacts + document_generated_tabular_outputs,
                     cancel_requested=cancel_requested,
                     request_correlation_id=request_correlation_id,
+                    current_user_message_id=user_message_id,
+                    current_assistant_message_id=assistant_message_id,
+                    structured_csv_spec=(execution_result.get('analysis_result') or {}).get('csv_file_spec'),
                 )
             if generated_file_output:
                 document_generated_analysis_artifacts.append(generated_file_output)
@@ -16286,6 +16614,11 @@ def register_route_backend_chats(bp):
         generated_analysis_metadata = _build_generated_analysis_metadata(
             generated_analysis_artifacts=document_generated_analysis_artifacts,
             generated_tabular_outputs=document_generated_tabular_outputs,
+        )
+        document_action_reply_content = _normalize_csv_artifact_handoff(
+            document_action_reply_content,
+            user_message,
+            document_generated_analysis_artifacts + document_generated_tabular_outputs,
         )
         document_action_citation_tracking = build_cited_source_subsets(
             document_action_reply_content,
@@ -20233,10 +20566,12 @@ def register_route_backend_chats(bp):
                         return asyncio.run(run_sk_call(
                             selected_agent.invoke,
                             build_agent_message_history(selected_agent),
+                            **({'csv_response': True} if getattr(selected_agent, 'supports_csv_response', False) else {}),
                         ))
                     def agent_success(result):
                         nonlocal reload_messages_required
                         msg = str(result)
+                        structured_csv_response_state['file_spec'] = (getattr(result, 'metadata', None) or {}).get('csv_file_spec')
                         notice = None
                         agent_used = getattr(selected_agent, 'name', 'All Plugins')
 
@@ -20560,6 +20895,7 @@ def register_route_backend_chats(bp):
             )
 
             thought_tracker.add_thought('generation', f"Sending to '{gpt_model}'")
+            structured_csv_response_state = {'file_spec': None}
             def invoke_gpt_fallback():
                 nonlocal conversation_history_for_api
                 conversation_history_for_api, _ = _prepare_conversation_context_for_invocation(
@@ -20582,6 +20918,34 @@ def register_route_backend_chats(bp):
                     'model': gpt_model,
                     'messages': conversation_history_for_api,
                 }
+                structured_csv_guidance_format = str(
+                    _resolve_generated_file_guidance_format(
+                        user_message,
+                        conversation_id,
+                        user_id,
+                    ) or ''
+                ).strip().lower()
+                structured_csv_response_requested = (
+                    not selected_agent
+                    and structured_csv_guidance_format in {'', 'csv'}
+                    and _supports_structured_csv_response(
+                        gpt_model,
+                        gpt_model_id,
+                        gpt_provider,
+                        gpt_endpoint,
+                    )
+                )
+                if structured_csv_response_requested:
+                    api_params['response_format'] = build_model_generated_csv_response_format()
+                    _append_structured_csv_response_guidance(
+                        conversation_history_for_api,
+                        generated_file_output_guidance,
+                    )
+                elif structured_csv_guidance_format == 'csv':
+                    _append_unstructured_csv_response_guidance(
+                        conversation_history_for_api,
+                        generated_file_output_guidance,
+                    )
                 _apply_response_length_for_model(
                     api_params,
                     gpt_response_length,
@@ -20601,7 +20965,10 @@ def register_route_backend_chats(bp):
                     debug_print(f"Using reasoning effort: {request_reasoning_effort}")
 
                 try:
-                    response = gpt_client.chat.completions.create(**api_params)
+                    response = _create_chat_completion_with_response_format_fallback(
+                        gpt_client,
+                        api_params,
+                    )
                 except Exception as e:
                     error_str = str(e).lower()
                     if request_reasoning_effort and (
@@ -20611,7 +20978,10 @@ def register_route_backend_chats(bp):
                     ):
                         debug_print(f"Reasoning effort not supported by {gpt_model}, retrying without reasoning_effort...")
                         api_params.pop('reasoning_effort', None)
-                        response = gpt_client.chat.completions.create(**api_params)
+                        response = _create_chat_completion_with_response_format_fallback(
+                            gpt_client,
+                            api_params,
+                        )
                     elif (
                         gpt_provider in ('aifoundry', 'new_foundry')
                         and 'api version not supported' in error_str
@@ -20636,7 +21006,10 @@ def register_route_backend_chats(bp):
                                     settings=settings,
                                     identity_context={'user_id': user_id},
                                 )
-                                response = retry_client.chat.completions.create(**api_params)
+                                response = _create_chat_completion_with_response_format_fallback(
+                                    retry_client,
+                                    api_params,
+                                )
                                 break
                             except Exception as retry_exc:
                                 last_error = retry_exc
@@ -20646,7 +21019,16 @@ def register_route_backend_chats(bp):
                     else:
                         raise
 
-                msg = response.choices[0].message.content
+                msg = extract_chat_completion_response_text(response)
+                if structured_csv_response_requested and 'response_format' in api_params:
+                    structured_response = parse_model_generated_csv_response(msg)
+                    if structured_response is not None:
+                        msg = structured_response['chat_response']
+                        structured_csv_response_state['file_spec'] = structured_response['file_spec']
+                    else:
+                        msg = extract_model_generated_chat_response(msg) or (
+                            'I could not safely validate the structured response, so no downloadable file was created.'
+                        )
                 notice = None
                 if enable_semantic_kernel and user_enable_agents:
                     msg = f"[GPT_FALLBACK_ADVANCED_FEATURES_NOT_AVAILABLE] {msg}"
@@ -20870,6 +21252,10 @@ def register_route_backend_chats(bp):
                     conversation_id=conversation_id,
                     function_results=agent_citations_list,
                     existing_outputs=generated_analysis_artifacts_list + generated_tabular_outputs_list,
+                    current_user_message_id=user_message_id,
+                    current_assistant_message_id=assistant_message_id,
+                    structured_csv_spec=structured_csv_response_state.get('file_spec'),
+                    require_structured_csv_spec=True,
                 )
             if generated_file_output:
                 generated_analysis_artifacts_list.append(generated_file_output)
@@ -20905,6 +21291,11 @@ def register_route_backend_chats(bp):
             )
             if tabular_background_handoff_content:
                 ai_message = tabular_background_handoff_content
+            ai_message = _normalize_csv_artifact_handoff(
+                ai_message,
+                user_message,
+                generated_analysis_artifacts_list + generated_tabular_outputs_list,
+            )
             generated_analysis_metadata = _build_generated_analysis_metadata(
                 generated_analysis_artifacts=generated_analysis_artifacts_list,
                 generated_tabular_outputs=generated_tabular_outputs_list,
@@ -21553,9 +21944,12 @@ def register_route_backend_chats(bp):
                     conversation_id,
                     user_id,
                 )
+                structured_csv_response_state = {'file_spec': None}
                 suppress_streamed_file_payload = requested_streamed_file_format in {'json', 'xml'}
-                streamed_file_status_content = _build_streaming_assistant_file_status(
-                    requested_streamed_file_format
+                streamed_file_status_content = (
+                    ''
+                    if requested_streamed_file_format == 'csv'
+                    else _build_streaming_assistant_file_status(requested_streamed_file_format)
                 )
                 generated_file_output_guidance = build_generated_file_output_guidance(
                     user_message,
@@ -24575,7 +24969,10 @@ def register_route_backend_chats(bp):
                                             },
                                         )
                                     else:
-                                        agent_stream = selected_agent.invoke_stream(messages=agent_message_history)
+                                        agent_stream = selected_agent.invoke_stream(
+                                            messages=agent_message_history,
+                                            **({'csv_response': True} if getattr(selected_agent, 'supports_csv_response', False) else {}),
+                                        )
                                     with SyncAsyncStream(agent_stream, loop) as stream_reader:
                                         while True:
                                             if stream_cancel_requested():
@@ -24588,6 +24985,8 @@ def register_route_backend_chats(bp):
 
                                             response_metadata = getattr(response, 'metadata', None)
                                             if isinstance(response_metadata, dict):
+                                                if 'csv_file_spec' in response_metadata:
+                                                    structured_csv_response_state['file_spec'] = response_metadata['csv_file_spec']
                                                 usage = response_metadata.get('usage')
                                                 if usage:
                                                     stream_usage = usage
@@ -24829,6 +25228,27 @@ def register_route_backend_chats(bp):
                             'stream': True,
                             'stream_options': {'include_usage': True}  # Request token usage in final chunk
                         }
+                        structured_csv_response_requested = (
+                            requested_streamed_file_format in {'', 'csv'}
+                            and _supports_structured_csv_response(
+                                gpt_model,
+                                gpt_model_id,
+                                gpt_provider,
+                                gpt_endpoint,
+                            )
+                        )
+                        if structured_csv_response_requested:
+                            stream_params['response_format'] = build_model_generated_csv_response_format()
+                            _append_structured_csv_response_guidance(
+                                conversation_history_for_api,
+                                generated_file_output_guidance,
+                            )
+                            suppress_streamed_file_payload = True
+                        elif requested_streamed_file_format == 'csv':
+                            _append_unstructured_csv_response_guidance(
+                                conversation_history_for_api,
+                                generated_file_output_guidance,
+                            )
                         _apply_response_length_for_model(
                             stream_params,
                             gpt_response_length,
@@ -24850,7 +25270,13 @@ def register_route_backend_chats(bp):
                         final_model_used = gpt_model
 
                         try:
-                            stream = gpt_client.chat.completions.create(**stream_params)
+                            stream = _create_chat_completion_with_response_format_fallback(
+                                gpt_client,
+                                stream_params,
+                            )
+                            if structured_csv_response_requested and 'response_format' not in stream_params:
+                                suppress_streamed_file_payload = False
+                                streamed_file_status_content = ''
                         except Exception as e:
                             # Check if error is related to reasoning_effort parameter
                             error_str = str(e).lower()
@@ -24862,7 +25288,13 @@ def register_route_backend_chats(bp):
                                 debug_print(f"Reasoning effort not supported by {gpt_model}, retrying without reasoning_effort...")
                                 # Retry without reasoning_effort
                                 stream_params.pop('reasoning_effort', None)
-                                stream = gpt_client.chat.completions.create(**stream_params)
+                                stream = _create_chat_completion_with_response_format_fallback(
+                                    gpt_client,
+                                    stream_params,
+                                )
+                                if structured_csv_response_requested and 'response_format' not in stream_params:
+                                    suppress_streamed_file_payload = False
+                                    streamed_file_status_content = ''
                             else:
                                 raise
 
@@ -24916,7 +25348,13 @@ def register_route_backend_chats(bp):
                             }
                             fallback_params.pop('reasoning_effort', None)
                             try:
-                                fallback_response = gpt_client.chat.completions.create(**fallback_params)
+                                fallback_response = _create_chat_completion_with_response_format_fallback(
+                                    gpt_client,
+                                    fallback_params,
+                                )
+                                if structured_csv_response_requested and 'response_format' not in fallback_params:
+                                    suppress_streamed_file_payload = False
+                                    streamed_file_status_content = ''
                             except Exception as fallback_error:
                                 fallback_error_str = str(fallback_error).lower()
                                 if request_reasoning_effort and (
@@ -24926,7 +25364,13 @@ def register_route_backend_chats(bp):
                                 ):
                                     debug_print(f"Reasoning effort not supported by {gpt_model} in non-streaming retry; retrying without reasoning_effort...")
                                     fallback_params.pop('reasoning_effort', None)
-                                    fallback_response = gpt_client.chat.completions.create(**fallback_params)
+                                    fallback_response = _create_chat_completion_with_response_format_fallback(
+                                        gpt_client,
+                                        fallback_params,
+                                    )
+                                    if structured_csv_response_requested and 'response_format' not in fallback_params:
+                                        suppress_streamed_file_payload = False
+                                        streamed_file_status_content = ''
                                 else:
                                     raise
 
@@ -24946,6 +25390,22 @@ def register_route_backend_chats(bp):
                                 raise RuntimeError(
                                     "The selected model returned an empty response. Check the model endpoint API version and provider compatibility, then use Test Model before trying again."
                                 )
+
+                        if structured_csv_response_requested and 'response_format' in stream_params:
+                            structured_response = parse_model_generated_csv_response(accumulated_content)
+                            if structured_response is not None:
+                                accumulated_content = structured_response['chat_response']
+                                structured_csv_response_state['file_spec'] = structured_response['file_spec']
+                                if structured_response['file_spec'] is not None:
+                                    yield f"data: {json.dumps({'content': _build_streaming_assistant_file_status('csv')})}\n\n"
+                            else:
+                                accumulated_content = extract_model_generated_chat_response(
+                                    accumulated_content,
+                                ) or 'I could not safely validate the structured response, so no downloadable file was created.'
+                            suppress_streamed_file_payload = False
+                            streamed_file_status_content = ''
+                            if accumulated_content:
+                                yield f"data: {json.dumps({'content': accumulated_content})}\n\n"
 
                         # Emit responded thought for regular LLM streaming
                         gpt_stream_total_duration_s = round(time.time() - request_start_time, 1)
@@ -25063,6 +25523,10 @@ def register_route_backend_chats(bp):
                             existing_outputs=generated_analysis_artifacts_list + generated_tabular_outputs_list,
                             cancel_requested=stream_cancel_requested,
                             request_correlation_id=mixed_source_request_correlation_id,
+                            current_user_message_id=user_message_id,
+                            current_assistant_message_id=assistant_message_id,
+                            structured_csv_spec=structured_csv_response_state.get('file_spec'),
+                            require_structured_csv_spec=True,
                         )
                     if generated_file_output:
                         generated_analysis_artifacts_list.append(generated_file_output)
@@ -25109,6 +25573,11 @@ def register_route_backend_chats(bp):
                     )
                     if tabular_background_handoff_content:
                         accumulated_content = tabular_background_handoff_content
+                    accumulated_content = _normalize_csv_artifact_handoff(
+                        accumulated_content,
+                        user_message,
+                        generated_analysis_artifacts_list + generated_tabular_outputs_list,
+                    )
                     if mixed_source_manifest:
                         fresh_finalization_manifest = resolve_authorized_source_manifest(
                             [source.get('document_id') for source in mixed_source_manifest],

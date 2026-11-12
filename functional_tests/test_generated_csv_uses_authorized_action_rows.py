@@ -27,6 +27,9 @@ assistant table still wins, a clarification turn publishes nothing, and an
 answered clarification resumes the original request using the earlier rows.
 """
 
+import ast
+import csv
+import io
 import json
 import sys
 import traceback
@@ -42,15 +45,38 @@ if str(Path(__file__).resolve().parent) not in sys.path:
 from test_support.versioning import assert_app_version_at_least  # noqa: E402
 
 from functions_generated_file_exports import (  # noqa: E402
+    MODEL_GENERATED_CSV_GUIDANCE,
     build_generated_file_export,
     build_generated_file_output_guidance,
+    build_structured_artifact_rows_payload,
     estimate_function_result_row_count,
     extract_authorized_function_result_rows,
+    function_results_report_truncated_rows,
+    normalize_link_only_csv_handoff,
     resolve_pending_generated_file_format,
     select_prior_turn_action_citations,
 )
+from functions_conversation_context import build_conversation_context_citation  # noqa: E402
+from functions_assistant_table_exports import extract_unambiguous_assistant_table_entries  # noqa: E402
 
 IMPLEMENTED_VERSION = '0.260.007'
+
+def test_csv_publication_requires_a_declaration():
+    payload = build_generated_file_export('Create a CSV', '| Name |\n| --- |\n| Alice |')
+    assert payload is None
+
+
+def test_csv_declaration_owns_format_and_rows():
+    payload = build_generated_file_export(
+        'Create a PDF from the source CSV',
+        'The requested result is ready.',
+        structured_csv_spec={'format': 'csv', 'columns': ['Name'], 'rows': [['Alice']]},
+        function_results=[{'function_result': {'rows': [{'Name': 'Bob'}]}}],
+    )
+    assert payload is not None
+    assert payload['output_format'] == 'csv'
+    assert payload['_structured_rows'] == [{'Name': 'Alice'}]
+
 
 TELEMETRY_COLUMNS = (
     'generation_time_utc',
@@ -136,6 +162,56 @@ def assert_true(condition, message):
         raise AssertionError(message)
 
 
+def _build_prior_source_loader_for_test(authorization, user_message, assistant_messages):
+    """Execute the actual route loader definitions with isolated storage/access dependencies."""
+    route_path = ROOT / 'application' / 'single_app' / 'route_backend_chats.py'
+    route_tree = ast.parse(route_path.read_text(encoding='utf-8'))
+    selected_names = {'_read_recent_assistant_messages', '_build_prior_turn_source_loaders'}
+    route_functions = [
+        node for node in route_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in selected_names
+    ]
+    assert_true(
+        {node.name for node in route_functions} == selected_names,
+        'Expected both prior-source route helpers to be available.',
+    )
+
+    events = []
+
+    class FakeMessagesContainer:
+        def read_item(self, item, partition_key):
+            events.append(('read_user', item, partition_key))
+            return user_message
+
+        def query_items(self, query, parameters, partition_key):
+            events.append(('query_history', query, parameters, partition_key))
+            return assistant_messages
+
+    def authorize_then_record(user_id, conversation_id):
+        events.append(('authorize', user_id, conversation_id))
+        return authorization(user_id, conversation_id)
+
+    namespace = {
+        'cosmos_messages_container': FakeMessagesContainer(),
+        '_authorize_personal_conversation_access': authorize_then_record,
+        '_resolve_prior_turn_history_window': lambda settings: 10,
+        'select_prior_turn_action_citations': select_prior_turn_action_citations,
+        'PRIOR_TURN_ACTION_RESULT_ARTIFACT_LIMIT': 25,
+        '_read_agent_citation_artifact_payloads': lambda conversation_id, artifact_ids: {},
+        'log_event': lambda *args, **kwargs: events.append(('log', args, kwargs)),
+    }
+    module = ast.Module(body=route_functions, type_ignores=[])
+    exec(compile(module, str(route_path), 'exec'), namespace)
+    source_loader, _ = namespace['_build_prior_turn_source_loaders'](
+        'user-1',
+        'conversation-1',
+        'current-user-message',
+        'current-assistant-message',
+        settings={},
+    )
+    return source_loader, events
+
+
 def build_sample_excerpt_reply(excerpt_row_count=3):
     """Rebuild the assistant reply that pasted real rows as an illustrative sample."""
     sample_lines = [','.join(TELEMETRY_COLUMNS)]
@@ -160,6 +236,7 @@ def test_pasted_sample_does_not_replace_authorized_rows():
         TELEMETRY_QUESTION,
         build_sample_excerpt_reply(),
         function_results=TELEMETRY_FUNCTION_RESULTS,
+        structured_csv_spec={'columns': list(TELEMETRY_COLUMNS), 'rows': [], 'row_source': 'current_action', 'source_action': 'YamcsPlugin.list_parameter_history'},
     )
 
     assert_true(export_payload is not None, 'Expected the telemetry request to publish a CSV artifact.')
@@ -200,6 +277,7 @@ def test_deliberate_assistant_table_still_wins():
         'create a combined CSV',
         '| Name | Department |\n| --- | --- |\n| Assistant-selected | Finance |\n',
         function_results=directory_results,
+        structured_csv_spec={'columns': ['Name', 'Department'], 'rows': [['Assistant-selected', 'Finance']]},
     )
 
     assert_true(export_payload is not None, 'Expected the combined CSV request to publish an artifact.')
@@ -219,6 +297,7 @@ def test_partial_excerpt_of_larger_result_is_still_replaced():
         TELEMETRY_QUESTION,
         build_sample_excerpt_reply(excerpt_row_count=25),
         function_results=TELEMETRY_FUNCTION_RESULTS,
+        structured_csv_spec={'columns': list(TELEMETRY_COLUMNS), 'rows': [], 'row_source': 'current_action', 'source_action': 'YamcsPlugin.list_parameter_history'},
     )
 
     assert_true(export_payload is not None, 'Expected the telemetry request to publish a CSV artifact.')
@@ -254,6 +333,7 @@ def test_answered_turn_still_publishes_action_rows():
         'create a csv',
         'Retrieved the BatteryVoltage1 archive window and prepared the export.',
         function_results=TELEMETRY_FUNCTION_RESULTS,
+        structured_csv_spec={'columns': list(TELEMETRY_COLUMNS), 'rows': [], 'row_source': 'current_action', 'source_action': 'YamcsPlugin.list_parameter_history'},
     )
 
     assert_true(export_payload is not None, 'Expected an ordinary reply to still publish the artifact.')
@@ -318,6 +398,7 @@ def test_followup_request_reuses_earlier_turn_rows():
         'Here is the CSV of the BatteryVoltage1 samples I retrieved.',
         function_results=[],
         prior_function_results_loader=lambda: FULL_TURN_FUNCTION_RESULTS,
+        structured_csv_spec={'columns': list(TELEMETRY_COLUMNS), 'rows': [], 'row_source': 'prior_action', 'source_action': 'YamcsPlugin.list_parameter_history'},
     )
 
     assert_true(export_payload is not None, 'Expected the follow-up request to publish an artifact.')
@@ -341,6 +422,7 @@ def test_current_turn_rows_are_never_double_counted():
         'Retrieved the archive window and prepared the export.',
         function_results=FULL_TURN_FUNCTION_RESULTS,
         prior_function_results_loader=lambda: FULL_TURN_FUNCTION_RESULTS,
+        structured_csv_spec={'columns': list(TELEMETRY_COLUMNS), 'rows': [], 'row_source': 'current_action', 'source_action': 'YamcsPlugin.list_parameter_history'},
     )
 
     assert_true(export_payload is not None, 'Expected the request to publish an artifact.')
@@ -371,6 +453,7 @@ def test_answering_the_clarification_publishes_the_csv():
         function_results=[],
         prior_function_results_loader=lambda: FULL_TURN_FUNCTION_RESULTS,
         pending_output_format=pending_format,
+        structured_csv_spec={'columns': list(TELEMETRY_COLUMNS), 'rows': [], 'row_source': 'prior_action', 'source_action': 'YamcsPlugin.list_parameter_history'},
     )
 
     assert_true(export_payload is not None, 'Expected the answered clarification to publish the CSV.')
@@ -453,6 +536,324 @@ def test_row_count_estimate_survives_citation_compaction():
     assert_true(
         estimate_function_result_row_count(unlabeled_citation) == len(TELEMETRY_ROWS),
         'Expected the truncated row list marker to restore the full count.',
+    )
+
+
+def test_conversation_context_citations_are_not_export_rows():
+    """Conversation grounding metadata must not become a one-row generated artifact."""
+    print('Testing conversation-context citation exclusion...')
+    assert_app_version_at_least(IMPLEMENTED_VERSION)
+
+    context_citation = build_conversation_context_citation(json.dumps({
+        'application': {'name': 'SimpleChat', 'version': '0.261.053'},
+        'message_metadata': {'button_states': {'web_search': False}},
+        'runtime': {'configured_model': 'test-model'},
+        'schema_version': '1.0',
+        'truncated': True,
+    }))
+
+    assert_true(
+        extract_authorized_function_result_rows([context_citation]) == [],
+        'Expected conversation-context JSON not to be treated as business data.',
+    )
+    assert_true(
+        estimate_function_result_row_count(context_citation) == 0,
+        'Expected context metadata not to count as a prior action dataset.',
+    )
+    assert_true(
+        not function_results_report_truncated_rows([context_citation]),
+        'Expected context metadata not to mark exports as truncated.',
+    )
+    assert_true(
+        select_prior_turn_action_citations([{'agent_citations': [context_citation]}]) == [],
+        'Expected context metadata not to be selected for prior-turn action reuse.',
+    )
+    legacy_context_citations = [
+        {
+            key: value
+            for key, value in context_citation.items()
+            if key != 'metadata_type'
+        },
+        {
+            'tool_name': 'Conversation Context',
+            'function_name': 'conversation_context',
+            'function_result': {'schema_version': '1.0', 'runtime': {'configured_model': 'test-model'}},
+            'success': True,
+        },
+    ]
+    assert_true(
+        all(extract_authorized_function_result_rows([citation]) == [] for citation in legacy_context_citations),
+        'Expected recognized legacy SimpleChat context identities not to become data rows.',
+    )
+    assert_true(
+        all(estimate_function_result_row_count(citation) == 0 for citation in legacy_context_citations),
+        'Expected legacy context citations not to contribute prior row estimates.',
+    )
+
+    csv_export = build_generated_file_export(
+        'create a csv',
+        'I could not find any data rows.',
+        function_results=[context_citation],
+    )
+    assert_true(csv_export is None, 'Expected context-only citations to produce no CSV artifact.')
+    for output_format in ('json', 'xml'):
+        structured_payload = build_structured_artifact_rows_payload(
+            f'export as {output_format}',
+            output_format,
+            function_results=[context_citation],
+        )
+        assert_true(
+            structured_payload is None,
+            f'Expected context-only citations not to produce a {output_format.upper()} artifact.',
+        )
+
+    action_result = {
+        'plugin_name': 'SalesPlugin',
+        'function_name': 'list_sales',
+        'success': True,
+        'function_result': {'rows': [{'ID': '1001', 'First Name': 'Amelia'}]},
+    }
+    mixed_rows = extract_authorized_function_result_rows([context_citation, action_result])
+    assert_true(
+        mixed_rows == [{'ID': '1001', 'First Name': 'Amelia'}],
+        'Expected real action rows to remain unchanged when context metadata is present.',
+    )
+
+
+def test_prior_assistant_table_is_reused_for_csv_followup():
+    """An explicit CSV follow-up must export the nearest prior assistant table verbatim."""
+    print('Testing prior assistant-table recovery...')
+    assert_app_version_at_least(IMPLEMENTED_VERSION)
+
+    sales_rows = [
+        {
+            'ID': str(1001 + index),
+            'First Name': f'First{index + 1}',
+            'Last Name': f'Last{index + 1}',
+            'Sales Amount': f'{(index + 1) * 125}.00',
+        }
+        for index in range(15)
+    ]
+    table_content = '\n'.join([
+        '| ID | First Name | Last Name | Sales Amount |',
+        '| --- | --- | --- | --- |',
+        *[
+            f"| {row['ID']} | {row['First Name']} | {row['Last Name']} | {row['Sales Amount']} |"
+            for row in sales_rows
+        ],
+    ])
+    loader_calls = []
+
+    def load_prior_assistant_source():
+        loader_calls.append(True)
+        return {
+            'id': 'prior-assistant-1',
+            'content': table_content,
+            'timestamp': '2026-01-01T12:00:00',
+            'function_results': [],
+        }
+
+    export_payload = build_generated_file_export(
+        'Generate the csv file for me to download',
+        'Download the CSV',
+        function_results=[build_conversation_context_citation(json.dumps({'runtime': {}}))],
+        prior_assistant_source_loader=load_prior_assistant_source,
+        structured_csv_spec={'columns': list(sales_rows[0]), 'rows': [], 'row_source': 'prior_assistant'},
+    )
+
+    assert_true(len(loader_calls) == 1, 'Expected one lazy prior-assistant lookup.')
+    assert_true(export_payload is not None, 'Expected the prior sales table to produce a CSV artifact.')
+    assert_true(export_payload['row_count'] == 15, 'Expected all 15 prior sales rows in the artifact.')
+    assert_true(
+        export_payload['row_source'] == 'earlier assistant response',
+        'Expected prior-table provenance to be reported accurately.',
+    )
+    parsed_rows = list(csv.DictReader(io.StringIO(export_payload['file_content'])))
+    assert_true(parsed_rows == sales_rows, 'Expected ordered columns and every original cell value to survive.')
+    csv_fenced_rows = extract_unambiguous_assistant_table_entries(
+        '```csv\nID,Name\n001,Ada\n002,"Grace, Hopper"\n```'
+    )
+    assert_true(
+        csv_fenced_rows == [{'ID': '001', 'Name': 'Ada'}, {'ID': '002', 'Name': 'Grace, Hopper'}],
+        'Expected fenced CSV recovery to preserve quoted commas and leading zeros.',
+    )
+    tab_separated_rows = extract_unambiguous_assistant_table_entries(
+        'ID\tName\n001\tAda\n002\tGrace'
+    )
+    assert_true(
+        tab_separated_rows == [{'ID': '001', 'Name': 'Ada'}, {'ID': '002', 'Name': 'Grace'}],
+        'Expected tab-separated prior tables to preserve identifiers and values.',
+    )
+
+
+def test_prior_assistant_table_recovery_rejects_new_or_changed_data_requests():
+    """Historical prose tables must not satisfy new synthetic or transformed data requests."""
+    print('Testing prior assistant-table intent boundaries...')
+    assert_app_version_at_least(IMPLEMENTED_VERSION)
+
+    for question in (
+        'Generate 15 sample sales records with ID and amount columns and create a csv',
+        'Generate the csv and add a region column',
+        'Download the csv with only rows where sales are above 500',
+    ):
+        loader_calls = []
+
+        def record_prior_source_lookup():
+            loader_calls.append(True)
+
+        export_payload = build_generated_file_export(
+            question,
+            'Download the CSV',
+            prior_assistant_source_loader=record_prior_source_lookup,
+        )
+        assert_true(export_payload is None, f'Expected no artifact for changed request: {question}')
+        assert_true(not loader_calls, f'Expected no history read for changed request: {question}')
+
+
+def test_ambiguous_prior_assistant_tables_are_not_recovered():
+    """When the nearest assistant reply has multiple tables, do not choose the largest one."""
+    print('Testing ambiguous prior assistant-table rejection...')
+    assert_app_version_at_least(IMPLEMENTED_VERSION)
+
+    table_a = '| ID | Name |\n| --- | --- |\n| 1 | Ada |'
+    table_b = '| ID | Name |\n| --- | --- |\n| 2 | Grace |'
+    ambiguous_content = f'{table_a}\n\nOther results:\n\n{table_b}'
+    assert_true(
+        extract_unambiguous_assistant_table_entries(ambiguous_content) is None,
+        'Expected the parser to mark multiple plausible tables as ambiguous.',
+    )
+    export_payload = build_generated_file_export(
+        'Generate the csv file for me to download',
+        'Download the CSV',
+        prior_assistant_source_loader=lambda: {
+            'id': 'prior-assistant-ambiguous',
+            'content': ambiguous_content,
+            'timestamp': '2026-01-01T12:00:00',
+            'function_results': [],
+        },
+        structured_csv_spec={'columns': ['ID', 'Name'], 'rows': [], 'row_source': 'prior_assistant'},
+    )
+    assert_true(export_payload is None, 'Expected ambiguous prior table content not to publish an artifact.')
+
+
+def test_blocked_prior_assistant_source_does_not_fall_back_to_older_actions():
+    """An incomplete nearest response must block both table and older action recovery."""
+    print('Testing blocked prior-source action fallback...')
+    assert_app_version_at_least(IMPLEMENTED_VERSION)
+
+    fallback_calls = []
+    export_payload = build_generated_file_export(
+        'Generate the csv file for me to download',
+        'Download the CSV',
+        prior_assistant_source_loader=lambda: {'reuse_blocked': True},
+        prior_function_results_loader=lambda: fallback_calls.append(True) or FULL_TURN_FUNCTION_RESULTS,
+        structured_csv_spec={'columns': ['ID', 'Name'], 'rows': [], 'row_source': 'prior_assistant'},
+    )
+    assert_true(export_payload is None, 'Expected blocked history to produce no artifact.')
+    assert_true(not fallback_calls, 'Expected the older action-history fallback to remain blocked.')
+
+
+def test_prior_assistant_route_loader_authorizes_and_applies_server_cutoff():
+    """The actual route loader must authorize before partition-scoped bounded history reads."""
+    print('Testing authorized prior-assistant route loader...')
+    assert_app_version_at_least(IMPLEMENTED_VERSION)
+
+    events = []
+    user_message = {
+        'id': 'current-user-message',
+        'conversation_id': 'conversation-1',
+        'role': 'user',
+        'timestamp': '2026-02-01T10:00:00',
+    }
+    assistant_messages = [{
+        'id': 'prior-assistant-message',
+        'content': '| ID | Name |\n| --- | --- |\n| 1001 | Ada |',
+        'timestamp': '2026-02-01T09:59:00',
+        'agent_citations': [],
+    }]
+
+    def authorize(user_id, conversation_id):
+        events.append(('authorize', user_id, conversation_id))
+
+    source_loader, loader_events = _build_prior_source_loader_for_test(
+        authorize,
+        user_message,
+        assistant_messages,
+    )
+    source = source_loader()
+
+    assert_true(source is not None, 'Expected a completed prior assistant response to be returned.')
+    assert_true(source['id'] == 'prior-assistant-message', 'Expected the nearest prior message only.')
+    assert_true(
+        [event[0] for event in loader_events] == ['authorize', 'read_user', 'query_history'],
+        'Expected authorization before reading the current message or prior history.',
+    )
+    history_query = loader_events[-1]
+    assert_true(history_query[3] == 'conversation-1', 'Expected history reads to use the authorized partition.')
+    assert_true(
+        {'name': '@before_timestamp', 'value': '2026-02-01T10:00:00'} in history_query[2],
+        'Expected history to stop before the current server-persisted user message.',
+    )
+    assert_true(
+        {'name': '@excluded_message_id', 'value': 'current-assistant-message'} in history_query[2],
+        'Expected the in-flight assistant message to be excluded.',
+    )
+
+
+def test_prior_assistant_route_loader_fails_closed_and_does_not_skip_incomplete_turns():
+    """Denied access reads nothing, and an incomplete nearest turn blocks older-table reuse."""
+    print('Testing prior-assistant route loader failure boundaries...')
+    assert_app_version_at_least(IMPLEMENTED_VERSION)
+
+    auth_attempts = []
+
+    def deny_access(user_id, conversation_id):
+        auth_attempts.append((user_id, conversation_id))
+        raise PermissionError('denied')
+
+    denied_loader, denied_events = _build_prior_source_loader_for_test(
+        deny_access,
+        {'id': 'current-user-message', 'conversation_id': 'conversation-1', 'role': 'user', 'timestamp': 'x'},
+        [],
+    )
+    assert_true(
+        denied_loader() == {'reuse_blocked': True},
+        'Expected denied access to explicitly block prior-source reuse.',
+    )
+    assert_true(
+        auth_attempts == [('user-1', 'conversation-1')],
+        'Expected access authorization to be attempted for the requested conversation.',
+    )
+    assert_true(
+        [event[0] for event in denied_events] == ['authorize', 'log'],
+        'Expected denied authorization to prevent user-message and history reads.',
+    )
+
+    events = []
+    incomplete_messages = [
+        {
+            'id': 'incomplete-nearest',
+            'content': '| ID | Name |\n| --- | --- |\n| 1 | Partial |',
+            'timestamp': '2026-02-01T09:59:00',
+            'metadata': {'incomplete': True, 'error': 'stream_interrupted'},
+            'agent_citations': [],
+        },
+        {
+            'id': 'older-complete',
+            'content': '| ID | Name |\n| --- | --- |\n| 2 | Grace |',
+            'timestamp': '2026-02-01T09:58:00',
+            'agent_citations': [],
+        },
+    ]
+    complete_loader, _ = _build_prior_source_loader_for_test(
+        lambda user_id, conversation_id: events.append(('authorize',)),
+        {'id': 'current-user-message', 'conversation_id': 'conversation-1', 'role': 'user', 'timestamp': '2026-02-01T10:00:00'},
+        incomplete_messages,
+    )
+    blocked_source = complete_loader()
+    assert_true(
+        isinstance(blocked_source, dict) and blocked_source.get('reuse_blocked') is True,
+        'Expected an incomplete nearest response to explicitly block older table reuse.',
     )
 
 
@@ -539,26 +940,54 @@ def test_csv_guidance_states_the_publication_contract():
     print('Testing CSV publication guidance parity...')
     assert_app_version_at_least(IMPLEMENTED_VERSION)
 
-    csv_guidance = build_generated_file_output_guidance('create a csv')
-    assert_true(
-        'attaches the file after generation' in csv_guidance,
-        'Expected CSV guidance to state that the server attaches the artifact.',
-    )
-    assert_true(
-        'cannot create or attach files' in csv_guidance,
-        'Expected CSV guidance to forbid claiming files cannot be attached.',
-    )
-    assert_true(
-        'do not paste a sample of the rows' in csv_guidance,
-        'Expected CSV guidance to forbid pasting a row sample instead of the artifact.',
-    )
-    assert_true(
-        'ask exactly one concise clarification' in csv_guidance,
-        'Expected the existing one-clarification rule to survive.',
-    )
+    csv_guidance = MODEL_GENERATED_CSV_GUIDANCE
+    assert_true('files=[] for clarifications' in csv_guidance, 'Expected clarifications to declare no files.')
+    assert_true('all rows from that action, not a sample' in csv_guidance, 'Expected explicit full-result source copying.')
+    assert_true('Never claim a file is already attached' in csv_guidance, 'Expected publication to remain server-controlled.')
+    assert_true(build_generated_file_output_guidance('create a csv') == '', 'Expected no prose-based CSV publication guidance.')
     assert_true(
         build_generated_file_output_guidance('summarize the selected sources') == '',
         'Expected non-artifact requests to receive no generated-file guidance.',
+    )
+    assert_true('Invent data only when explicitly requested' in csv_guidance, 'Expected synthetic data to require explicit permission.')
+
+
+def test_link_only_csv_handoff_reflects_publication_state():
+    """A link-only response is replaced only with a truthful server-state handoff."""
+    print('Testing link-only CSV handoff normalization...')
+    assert_app_version_at_least(IMPLEMENTED_VERSION)
+
+    link_only_content = '[Download the CSV](sandbox:/mnt/data/sales.csv)'
+    assert_true(
+        normalize_link_only_csv_handoff(
+            link_only_content,
+            {'output_format': 'csv', 'artifact_message_id': 'artifact-1'},
+        ) == 'The CSV artifact was published and is available in this chat.',
+        'Expected a published artifact to receive a server-authored handoff.',
+    )
+    assert_true(
+        normalize_link_only_csv_handoff(
+            '<a href="sandbox:/mnt/data/sales.csv">Download the CSV</a>',
+            {'output_format': 'csv', 'background_export': True},
+        ) == 'The CSV export is queued for processing and will appear in this chat when it is ready.',
+        'Expected queued exports not to be presented as complete.',
+    )
+    assert_true(
+        normalize_link_only_csv_handoff(
+            link_only_content,
+            {'output_format': 'csv', 'approval': {'is_pending': True}},
+        ) == 'The CSV artifact is ready and is pending approval before it can be downloaded.',
+        'Expected pending approval to be explicit.',
+    )
+    assert_true(
+        normalize_link_only_csv_handoff(link_only_content, None)
+        == 'I could not confirm that a CSV artifact was published, so no download is available.',
+        'Expected an unconfirmed artifact not to be claimed as published.',
+    )
+    narrative = 'I found 15 sales records. [Download the CSV](sandbox:/mnt/data/sales.csv)'
+    assert_true(
+        normalize_link_only_csv_handoff(narrative, {'output_format': 'csv'}) == narrative,
+        'Expected useful assistant narrative to remain unchanged.',
     )
 
 
@@ -576,9 +1005,17 @@ def run_tests() -> bool:
         test_answering_the_clarification_publishes_the_csv,
         test_pending_clarification_does_not_override_a_new_request,
         test_row_count_estimate_survives_citation_compaction,
+        test_conversation_context_citations_are_not_export_rows,
+        test_prior_assistant_table_is_reused_for_csv_followup,
+        test_prior_assistant_table_recovery_rejects_new_or_changed_data_requests,
+        test_ambiguous_prior_assistant_tables_are_not_recovered,
+        test_blocked_prior_assistant_source_does_not_fall_back_to_older_actions,
+        test_prior_assistant_route_loader_authorizes_and_applies_server_cutoff,
+        test_prior_assistant_route_loader_fails_closed_and_does_not_skip_incomplete_turns,
         test_reach_back_prefers_the_dataset_over_newer_lookups,
         test_reach_back_falls_back_to_the_only_rows_available,
         test_csv_guidance_states_the_publication_contract,
+        test_link_only_csv_handoff_reflects_publication_state,
     ]
 
     results = []

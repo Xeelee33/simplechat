@@ -109,6 +109,28 @@ class TestModelCapabilityCatalog(unittest.TestCase):
         self.assertIsNotNone(record)
         self.assertEqual(record["id"], "gpt-5.6-sol")
 
+    def test_gpt4_structured_output_models_resolve(self):
+        """Supported GPT-4 versions and configured deployment names resolve."""
+        supported_identifiers = (
+            ("gpt-4o", "gpt-4o"),
+            ("gpt-4o-2024-11-20", "gpt-4o"),
+            ("openai-oigchat-sbx-gpt-4o", "gpt-4o"),
+            ("gpt-4.1", "gpt-4.1"),
+            ("gpt-4.1-2025-04-14", "gpt-4.1"),
+            ("openai-oigchat-sbx-gpt-4.1", "gpt-4.1"),
+        )
+        for identifier, expected_model_id in supported_identifiers:
+            with self.subTest(identifier=identifier):
+                record = capabilities.find_model_catalog_record(identifier)
+                self.assertIsNotNone(record)
+                self.assertEqual(record["id"], expected_model_id)
+                structured_output = capabilities.resolve_model_capability(
+                    capabilities.CAPABILITY_STRUCTURED_OUTPUT,
+                    identifier,
+                    default=False,
+                )
+                self.assertTrue(structured_output)
+
     def test_override_precedence(self):
         """Per-model and endpoint overrides outrank catalog and heuristics."""
         model = {"modelName": "gpt-4o", "capabilities": {"processesImages": False}}

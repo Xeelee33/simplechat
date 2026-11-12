@@ -13,6 +13,7 @@ import ast
 import asyncio
 from contextlib import contextmanager
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 
 from semantic_kernel.connectors.ai.function_choice_behavior import FunctionChoiceBehavior
@@ -22,6 +23,8 @@ from semantic_kernel.contents.chat_history import ChatHistory
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER_FILE = ROOT / "application" / "single_app" / "functions_workflow_runner.py"
+sys.path.insert(0, str(RUNNER_FILE.parent))
+from functions_generated_file_exports import prepare_model_csv_response, decode_model_csv_response
 
 
 class FakeKernel:
@@ -98,6 +101,8 @@ def load_model_core_helpers():
         "FunctionChoiceBehavior": FunctionChoiceBehavior,
         "Kernel": lambda: kernel,
         "PromptExecutionSettings": PromptExecutionSettings,
+        "prepare_model_csv_response": prepare_model_csv_response,
+        "decode_model_csv_response": decode_model_csv_response,
         "_add_workflow_activity_thought": lambda *args, **kwargs: None,
         "_build_agent_citations_from_invocations": lambda user_id, conversation_id: [
             {"user_id": user_id, "conversation_id": conversation_id}
