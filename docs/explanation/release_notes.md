@@ -2,6 +2,15 @@
 
 For feature-focused and fix-focused drill-downs by version, see [Features by Version](https://github.com/microsoft/simplechat/tree/main/docs/explanation/features) and [Fixes by Version](https://github.com/microsoft/simplechat/tree/main/docs/explanation/fixes).
 
+### **(v0.261.066)**
+
+#### User Interface Enhancements
+
+*   **Bulk Delegated Item Policy Creation**
+    *   Administrators can add multiple distinct delegated items to one policy form with add and remove controls, eliminating repeated form submissions for the same access rules.
+    *   Saving creates an individual policy for each selected item, preserving existing Cosmos-backed enforcement and single-policy editing behavior.
+    *   (Ref: `admin_governance.js`, `docs/admin/governance.md`)
+
 ### **(v0.261.065)**
 
 #### Bug Fixes

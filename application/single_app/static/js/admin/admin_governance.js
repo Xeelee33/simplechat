@@ -383,6 +383,98 @@ function buildDefaultItemPolicyName(entityType, itemId, resourceLabel = '') {
     return `${label} ${entityLabel} Policy`;
 }
 
+function getGovernanceItemSelectorInputs() {
+    return Array.from(document.querySelectorAll('.governance-item-selector'));
+}
+
+function getSelectedGovernanceItemIds() {
+    return getGovernanceItemSelectorInputs()
+        .map((input) => String(input.value || '').trim())
+        .filter((itemId) => itemId);
+}
+
+function getGovernanceItemResourceLabel(itemId) {
+    const normalizedItemId = String(itemId || '').trim();
+    const entityType = normalizeGovernanceItemEntityType(getItemEntityTypeInput()?.value || '');
+    if (!normalizedItemId || isGovernanceCustomItemIdEntityType(entityType)) {
+        return normalizedItemId;
+    }
+
+    const options = Array.isArray(governanceItemLookupState[entityType]) ? governanceItemLookupState[entityType] : [];
+    const option = options.find((candidate) => candidate.value === normalizedItemId);
+    return String(option?.label || normalizedItemId).trim();
+}
+
+function canAddGovernanceItemSelector() {
+    const entityType = normalizeGovernanceItemEntityType(getItemEntityTypeInput()?.value || '');
+    return !isGovernanceItemPolicyEditMode() && !isGovernanceCustomItemIdEntityType(entityType);
+}
+
+function setGovernanceItemSelectorControls() {
+    const canAddSelector = canAddGovernanceItemSelector();
+    const addButton = document.getElementById('governance-add-item-selector-btn');
+    if (addButton) {
+        addButton.classList.toggle('d-none', !canAddSelector);
+        addButton.disabled = !canAddSelector;
+    }
+
+    document.querySelectorAll('.governance-remove-item-selector-btn').forEach((button) => {
+        button.disabled = !canAddSelector;
+    });
+}
+
+function removeAdditionalGovernanceItemSelectors() {
+    getGovernanceItemSelectorInputs().slice(1).forEach((input) => {
+        input.closest('.governance-item-selector-row')?.remove();
+    });
+}
+
+function addGovernanceItemSelector() {
+    if (!canAddGovernanceItemSelector()) {
+        return;
+    }
+
+    const list = document.getElementById('governance-item-selector-list');
+    if (!list) {
+        return;
+    }
+
+    const row = document.createElement('div');
+    row.className = 'input-group mt-2 governance-item-selector-row';
+
+    const selector = document.createElement('select');
+    selector.className = 'form-select governance-item-selector';
+    selector.setAttribute('aria-label', 'Additional delegated item');
+    selector.addEventListener('change', () => {
+        renderGovernanceItemLookupOptions(
+            normalizeGovernanceItemEntityType(getItemEntityTypeInput()?.value || ''),
+        );
+        syncGovernanceItemResourceLabelFromSelection();
+    });
+
+    const removeButton = document.createElement('button');
+    removeButton.type = 'button';
+    removeButton.className = 'btn btn-outline-danger governance-remove-item-selector-btn';
+    removeButton.setAttribute('aria-label', 'Remove delegated item');
+    removeButton.title = 'Remove delegated item';
+    setBootstrapIcon(removeButton, 'bi bi-dash-lg');
+    removeButton.addEventListener('click', () => {
+        row.remove();
+        renderGovernanceItemLookupOptions(
+            normalizeGovernanceItemEntityType(getItemEntityTypeInput()?.value || ''),
+        );
+        syncGovernanceItemResourceLabelFromSelection();
+    });
+
+    row.appendChild(selector);
+    row.appendChild(removeButton);
+    list.appendChild(row);
+    renderGovernanceItemLookupOptions(
+        normalizeGovernanceItemEntityType(getItemEntityTypeInput()?.value || ''),
+    );
+    selector.focus();
+}
+
 function setGovernanceItemLookupStatus(message, level = 'muted') {
     const status = document.getElementById('governance-item-id-status');
     if (!status) {
@@ -627,13 +719,15 @@ async function loadGovernanceItemLookup(entityType, forceReload = false) {
 }
 
 function renderGovernanceItemLookupOptions(entityType, preferredValue = '') {
-    const itemIdInput = getItemIdInput();
-    if (!itemIdInput) {
+    const itemIdInputs = getGovernanceItemSelectorInputs();
+    if (itemIdInputs.length === 0) {
         return;
     }
 
     const options = Array.isArray(governanceItemLookupState[entityType]) ? governanceItemLookupState[entityType] : [];
-    const currentValue = String(preferredValue || '').trim();
+    const currentValues = itemIdInputs.map((input, index) => {
+        return index === 0 && preferredValue ? String(preferredValue).trim() : String(input.value || '').trim();
+    });
     const filterValue = String(getItemLookupFilterInput()?.value || '').trim().toLowerCase();
     const visibleOptions = (filterValue
         ? options.filter((option) => {
@@ -649,23 +743,26 @@ function renderGovernanceItemLookupOptions(entityType, preferredValue = '') {
             );
         });
 
-    itemIdInput.innerHTML = '';
+    itemIdInputs.forEach((itemIdInput, index) => {
+        const currentValue = currentValues[index];
+        const selectedElsewhere = new Set(currentValues.filter((value, valueIndex) => value && valueIndex !== index));
+        const availableOptions = visibleOptions.filter((option) => !selectedElsewhere.has(option.value));
+        itemIdInput.textContent = '';
 
-    const placeholder = document.createElement('option');
-    placeholder.value = '';
-    placeholder.textContent = visibleOptions.length > 0 ? 'Select an item' : 'No items available';
-    itemIdInput.appendChild(placeholder);
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = availableOptions.length > 0 ? 'Select an item' : 'No items available';
+        itemIdInput.appendChild(placeholder);
 
-    visibleOptions.forEach((option) => {
-        itemIdInput.appendChild(buildGovernanceItemLookupOption(option));
+        availableOptions.forEach((option) => {
+            itemIdInput.appendChild(buildGovernanceItemLookupOption(option));
+        });
+
+        itemIdInput.value = availableOptions.some((option) => option.value === currentValue) ? currentValue : '';
     });
 
-    if (currentValue && visibleOptions.some((option) => option.value === currentValue)) {
-        itemIdInput.value = currentValue;
-    } else {
-        itemIdInput.value = '';
-    }
     syncGovernanceItemResourceLabelFromSelection();
+    setGovernanceItemSelectorControls();
 
     const hint = GOVERNANCE_ITEM_LOOKUP_HINTS[entityType] || 'Select a delegated item.';
     if (options.length > 0) {
@@ -704,6 +801,10 @@ function applyGovernanceItemTargetEditState() {
     if (refreshButton) {
         refreshButton.disabled = usesCustomItemId;
     }
+    if (!canAddGovernanceItemSelector()) {
+        removeAdditionalGovernanceItemSelectors();
+    }
+    setGovernanceItemSelectorControls();
 }
 
 async function refreshGovernanceItemLookup(entityType, forceReload = false, preferredValue = '') {
@@ -1844,6 +1945,7 @@ async function openGovernanceItemPolicyEditor(policy = null) {
         itemFilterInput.value = '';
     }
 
+    removeAdditionalGovernanceItemSelectors();
     entityTypeInput.value = entityType;
     if (policyIdInput) {
         policyIdInput.value = policyId;
@@ -2089,13 +2191,18 @@ function ensureGovernanceItemPolicyEditorModal() {
                                     <label class="form-label" for="governance-item-id-filter">Delegated Item</label>
                                     <div id="governance-item-id-lookup-controls">
                                         <input type="search" class="form-control mb-2" id="governance-item-id-filter" placeholder="Filter delegated items by name or ID">
-                                        <div class="input-group">
-                                            <select class="form-select" id="governance-item-id">
-                                                <option value="">Loading items...</option>
-                                            </select>
-                                            <button type="button" class="btn btn-outline-secondary" id="governance-item-id-refresh-btn" title="Refresh lookup" aria-label="Refresh delegated item lookup">
-                                                <i class="bi bi-arrow-clockwise"></i>
-                                            </button>
+                                        <div id="governance-item-selector-list">
+                                            <div class="input-group governance-item-selector-row">
+                                                <select class="form-select governance-item-selector" id="governance-item-id">
+                                                    <option value="">Loading items...</option>
+                                                </select>
+                                                <button type="button" class="btn btn-outline-secondary" id="governance-item-id-refresh-btn" title="Refresh lookup" aria-label="Refresh delegated item lookup">
+                                                    <i class="bi bi-arrow-clockwise"></i>
+                                                </button>
+                                                <button type="button" class="btn btn-outline-primary" id="governance-add-item-selector-btn" title="Add delegated item" aria-label="Add delegated item">
+                                                    <i class="bi bi-plus-lg"></i>
+                                                </button>
+                                            </div>
                                         </div>
                                     </div>
                                     <input type="text" class="form-control d-none" id="governance-item-id-custom" placeholder="Access scope, source, destination pattern, legacy item key, or *" disabled>
@@ -2474,6 +2581,7 @@ function wireGovernanceItemPolicyEditorHandlers(modalElement) {
             if (filterInput) {
                 filterInput.value = '';
             }
+            removeAdditionalGovernanceItemSelectors();
             await refreshGovernanceItemLookup(entityType, false, '');
             syncGovernanceItemResourceLabelFromSelection();
         });
@@ -2498,7 +2606,17 @@ function wireGovernanceItemPolicyEditorHandlers(modalElement) {
     const itemIdInput = modalElement.querySelector('#governance-item-id');
     if (itemIdInput) {
         itemIdInput.addEventListener('change', () => {
+            renderGovernanceItemLookupOptions(
+                normalizeGovernanceItemEntityType(getItemEntityTypeInput()?.value || ''),
+            );
             syncGovernanceItemResourceLabelFromSelection();
+        });
+    }
+
+    const addItemSelectorButton = modalElement.querySelector('#governance-add-item-selector-btn');
+    if (addItemSelectorButton) {
+        addItemSelectorButton.addEventListener('click', () => {
+            addGovernanceItemSelector();
         });
     }
 
@@ -4139,19 +4257,14 @@ async function saveItemPolicy(event) {
     }
 
     const entityType = normalizeGovernanceItemEntityType(entityTypeInput.value);
-    const itemId = getCurrentGovernanceItemIdValue();
-    syncGovernanceItemResourceLabelFromSelection();
-    const resourceLabel = String(resourceLabelInput?.value || '').trim() || (isGovernanceCustomItemIdEntityType(entityType) ? itemId : '');
-    const policyName = String(policyNameInput?.value || '').trim() || buildDefaultItemPolicyName(entityType, itemId, resourceLabel);
     const editContext = isGovernanceItemPolicyEditMode() ? governanceItemPolicyEditorContext : null;
+    const itemIds = editContext
+        ? [getCurrentGovernanceItemIdValue()]
+        : getSelectedGovernanceItemIds();
+    syncGovernanceItemResourceLabelFromSelection();
 
-    if (!entityType || !itemId) {
-        setGovernanceItemEditorStatus('Entity type and item ID are required for item governance policies.', 'warning');
-        return;
-    }
-
-    if (!policyName) {
-        setGovernanceItemEditorStatus('Policy name is required for delegated item policies.', 'warning');
+    if (!entityType || itemIds.length === 0) {
+        setGovernanceItemEditorStatus('Select at least one delegated item before saving.', 'warning');
         return;
     }
 
@@ -4160,42 +4273,59 @@ async function saveItemPolicy(event) {
         return;
     }
 
-    const payload = {
-        entity_type: entityType,
-        item_id: itemId,
-        policy_id: String(policyIdInput?.value || '').trim(),
-        policy_name: policyName,
-        resource_label: resourceLabel,
-        allow_all: allowAllInput.checked,
-        allowed_users: allowAllInput.checked ? [] : splitPrincipalList(usersInput.value),
-        allowed_groups: allowAllInput.checked ? [] : splitPrincipalList(groupsInput.value),
-        denied_users: splitPrincipalList(deniedUsersInput.value),
-        denied_groups: splitPrincipalList(deniedGroupsInput.value),
-    };
-    if (editContext) {
-        payload.original_entity_type = editContext.originalEntityType;
-        payload.original_item_id = editContext.originalItemId;
-    }
+    const savedItemIds = [];
+    for (const itemId of itemIds) {
+        const resourceLabel = getGovernanceItemResourceLabel(itemId);
+        const policyName = String(policyNameInput?.value || '').trim() || buildDefaultItemPolicyName(entityType, itemId, resourceLabel);
+        if (!policyName) {
+            setGovernanceItemEditorStatus('Policy name is required for delegated item policies.', 'warning');
+            return;
+        }
 
-    const response = await fetch('/api/admin/governance/item-policies', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-        },
-        body: JSON.stringify(payload),
-    });
+        const payload = {
+            entity_type: entityType,
+            item_id: itemId,
+            policy_id: editContext ? String(policyIdInput?.value || '').trim() : '',
+            policy_name: policyName,
+            resource_label: resourceLabel,
+            allow_all: allowAllInput.checked,
+            allowed_users: allowAllInput.checked ? [] : splitPrincipalList(usersInput.value),
+            allowed_groups: allowAllInput.checked ? [] : splitPrincipalList(groupsInput.value),
+            denied_users: splitPrincipalList(deniedUsersInput.value),
+            denied_groups: splitPrincipalList(deniedGroupsInput.value),
+        };
+        if (editContext) {
+            payload.original_entity_type = editContext.originalEntityType;
+            payload.original_item_id = editContext.originalItemId;
+        }
 
-    if (!response.ok) {
-        const payload = await response.json().catch(() => ({}));
-        throw new Error(payload.error || 'Unable to save item governance policy.');
+        const response = await fetch('/api/admin/governance/item-policies', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                Accept: 'application/json',
+            },
+            body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+            const errorPayload = await response.json().catch(() => ({}));
+            const savedMessage = savedItemIds.length > 0
+                ? ` Saved ${savedItemIds.length} item polic${savedItemIds.length === 1 ? 'y' : 'ies'} before the failure.`
+                : '';
+            throw new Error(`${errorPayload.error || 'Unable to save item governance policy.'}${savedMessage}`);
+        }
+        savedItemIds.push(itemId);
     }
 
     await loadItemPolicies();
     updateItemAllowListSummary();
     governanceItemPolicyEditorModal?.hide();
     clearGovernanceStatus();
-    showGovernanceToast('Item governance policy saved successfully.', 'success');
+    showGovernanceToast(
+        `Saved ${savedItemIds.length} item governance polic${savedItemIds.length === 1 ? 'y' : 'ies'} successfully.`,
+        'success',
+    );
 }
 
 function wireGovernanceHandlers() {

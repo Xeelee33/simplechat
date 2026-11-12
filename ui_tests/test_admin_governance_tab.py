@@ -2,8 +2,8 @@
 """
 UI test for admin governance tab rendering and API wiring.
 
-Version: 0.261.064
-Implemented in: 0.241.009; 0.241.025; 0.242.012; 0.242.013; 0.242.014; 0.242.018; 0.242.019; 0.250.204; 0.250.205; 0.250.206; 0.250.207; 0.250.208; 0.261.002; 0.261.063; 0.261.064
+Version: 0.261.066
+Implemented in: 0.241.009; 0.241.025; 0.242.012; 0.242.013; 0.242.014; 0.242.018; 0.242.019; 0.250.204; 0.250.205; 0.250.206; 0.250.207; 0.250.208; 0.261.002; 0.261.063; 0.261.064; 0.261.066
 
 This test ensures the Governance tab is present in admin settings, the
 sidebar navigation exposes the same destination, feature policy fetch/save
@@ -301,6 +301,11 @@ def test_admin_governance_tab_and_api_wiring():
             page.locator("#governance-item-entity-type").select_option("global_agent")
             page.wait_for_selector("#governance-item-id option[value='global-agent-2']")
             page.locator("#governance-item-id").select_option("global-agent-2")
+            page.get_by_role("button", name="Add delegated item").click()
+            additional_item_selector = page.locator(".governance-item-selector").nth(1)
+            assert additional_item_selector.locator("option[value='global-agent-2']").count() == 0
+            additional_item_selector.select_option("global-agent-1")
+            assert page.locator(".governance-remove-item-selector-btn").count() == 1
             page.locator("#governance-item-allow-all").uncheck()
 
             page.locator("#governance-item-csv-target").select_option("users")
@@ -358,8 +363,17 @@ def test_admin_governance_tab_and_api_wiring():
             assert edited_policy_request["body"].get("item_id") == "global-agent-2", (
                 "Expected existing policy edits to send the selected retarget item"
             )
-            assert item_put_requests[-1]["body"].get("denied_groups") == ["blocked-group-xyz"], (
-                "Expected item policy save payload to include block-list groups"
+            multi_item_policy_requests = [
+                request["body"] for request in item_put_requests
+                if request["body"].get("entity_type") == "global_agent"
+                and request["body"].get("item_id") in {"global-agent-1", "global-agent-2"}
+                and not request["body"].get("policy_id")
+            ]
+            assert {request["item_id"] for request in multi_item_policy_requests} == {"global-agent-1", "global-agent-2"}, (
+                "Expected one new item policy request for each selected delegated item"
+            )
+            assert all(request.get("denied_groups") == ["blocked-group-xyz"] for request in multi_item_policy_requests), (
+                "Expected each item policy save payload to include block-list groups"
             )
         finally:
             context.close()

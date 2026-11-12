@@ -2,8 +2,8 @@
 #!/usr/bin/env python3
 """
 Functional test for governance route and enforcement wiring coverage.
-Version: 0.261.002
-Implemented in: 0.242.011; 0.242.012; 0.242.013; 0.242.014; 0.242.018; 0.242.019; 0.250.204; 0.250.205; 0.250.206; 0.250.207; 0.250.208; 0.261.002
+Version: 0.261.066
+Implemented in: 0.242.011; 0.242.012; 0.242.013; 0.242.014; 0.242.018; 0.242.019; 0.250.204; 0.250.205; 0.250.206; 0.250.207; 0.250.208; 0.261.002; 0.261.066
 
 This test ensures governance routes are registered and guarded, and that
 updated backend modules include governance enforcement hooks for endpoint,
@@ -208,6 +208,11 @@ def test_governance_enforcement_hooks_across_changed_routes():
         "openGovernanceDelegatedItemEditor",
         "governance-item-policy-name",
         "governance-item-policy-id",
+        "governance-item-selector-list",
+        "governance-add-item-selector-btn",
+        "governance-remove-item-selector-btn",
+        "getSelectedGovernanceItemIds()",
+        "for (const itemId of itemIds)",
         "governanceItemPolicyEditorContext",
         "applyGovernanceItemTargetEditState",
         "Changing the target will move this policy to the selected delegated item when saved",

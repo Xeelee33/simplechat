@@ -46,6 +46,12 @@ The Feature Policies section belongs to the Policies tab. Use it with the adjace
 
 The Delegated Item Policies section belongs to the Policies tab. Use it with the adjacent settings in this group so related rollout, access, and operational choices stay aligned.
 
+### Creating policies for several delegated items
+
+Starting in **0.261.066**, a new delegated item policy can target more than one item of the selected entity type. Use the **Add delegated item** button to add selectors; each later selector excludes items already selected above it. Saving creates an individual policy for every selected item with the same access rules, preserving the policy behavior used by Cosmos-backed enforcement.
+
+Editing remains intentionally single-target. An existing policy can still be moved to one different item, but the multi-item controls are unavailable so an edit cannot accidentally clone or overwrite policies.
+
 #### Settings
 
 | Setting | What it does | Default | Notes |
