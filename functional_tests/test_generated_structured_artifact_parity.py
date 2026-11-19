@@ -8,18 +8,13 @@ Implemented in: 0.260.010
 The CSV work in 0.260.007 through 0.260.009 left three gaps in the sibling
 formats and one loose end:
 
-  1. JSON and XML were built only by parsing the payload out of the assistant
-     reply, so they could never use authorized action rows and never reached
-     back to rows an earlier turn already gathered.
-  2. The schema clarification gate lived inside the CSV branch, so a turn that
-     asked a clarifying question could still publish a DOCX or PDF.
-  3. DOCX and PDF guidance never forbade claiming that files cannot be created,
-     which is the exact sentence that produced the truncated CSV.
-  4. The DOCX and PDF passthrough reason code compared one row-source literal,
-     so it was dropped when rows came from an earlier turn.
+  1. JSON and XML could not use authorized action rows or reach back to earlier
+     turns.
+  2. DOCX and PDF were generated from prose or action rows without a validated
+     model declaration.
 
-This test ensures every generated file format resolves rows the same way and
-refuses to publish on a clarification turn.
+This test ensures JSON/XML row behavior remains intact and DOCX/PDF publication
+requires a validated structured declaration.
 """
 
 import sys
@@ -166,9 +161,9 @@ def test_clarification_turn_publishes_no_artifact_in_any_format():
         )
 
 
-def test_docx_and_pdf_still_publish_a_normal_answer():
-    """The clarification gate must not suppress ordinary document requests."""
-    print('Testing DOCX/PDF normal publication...')
+def test_docx_and_pdf_require_a_validated_declaration():
+    """Prose or action rows alone must not authorize DOCX or PDF publication."""
+    print('Testing DOCX/PDF declaration requirement...')
     assert_app_version_at_least(IMPLEMENTED_VERSION)
 
     for question in ('create a word document', 'create a pdf'):
@@ -177,54 +172,45 @@ def test_docx_and_pdf_still_publish_a_normal_answer():
             'Here is the summary of the retrieved samples.',
             function_results=TELEMETRY_FUNCTION_RESULTS,
         )
-        assert_true(export_payload is not None, f'Expected an artifact for: {question}')
-        assert_true(
-            export_payload['row_count'] == len(TELEMETRY_ROWS),
-            f'Expected the authorized rows to be embedded for: {question}',
-        )
+        assert_true(export_payload is None, f'Expected no undeclared artifact for: {question}')
 
 
-def test_docx_and_pdf_keep_the_reason_code_for_earlier_rows():
-    """Provenance must not drop the passthrough reason code when rows come from earlier."""
-    print('Testing DOCX/PDF passthrough reason code...')
+def test_docx_and_pdf_do_not_copy_earlier_action_rows_without_declaration():
+    """An earlier action result must not replace the required document declaration."""
+    print('Testing DOCX/PDF earlier-row exclusion...')
     assert_app_version_at_least(IMPLEMENTED_VERSION)
 
+    prior_calls = []
     export_payload = build_generated_file_export(
         'create a word document',
         '',
         function_results=[],
-        prior_function_results_loader=lambda: TELEMETRY_FUNCTION_RESULTS,
+        prior_function_results_loader=lambda: prior_calls.append(True) or TELEMETRY_FUNCTION_RESULTS,
     )
 
-    assert_true(export_payload is not None, 'Expected a DOCX artifact from earlier rows.')
-    assert_true(
-        export_payload['row_source'] == 'earlier action result',
-        'Expected earlier-turn provenance on the DOCX artifact.',
-    )
-    assert_true(
-        export_payload.get('passthrough_reason_code') == 'explicit_format_conversion',
-        'Expected the passthrough reason code to survive earlier-turn provenance.',
-    )
+    assert_true(export_payload is None, 'Expected earlier action rows not to create an undeclared DOCX.')
+    assert_true(not prior_calls, 'Expected undeclared DOCX requests not to load earlier action rows.')
 
 
-def test_docx_and_pdf_guidance_states_the_publication_contract():
-    """DOCX and PDF must not be left able to claim they cannot create files."""
-    print('Testing DOCX/PDF guidance parity...')
+def test_docx_and_pdf_guidance_states_the_declaration_contract():
+    """DOCX and PDF guidance must constrain declarations and publication claims."""
+    print('Testing DOCX/PDF declaration guidance...')
     assert_app_version_at_least(IMPLEMENTED_VERSION)
 
     for question in ('create a word document', 'create a pdf'):
         guidance = build_generated_file_output_guidance(question)
         assert_true(
-            'attaches the file after generation' in guidance,
-            f'Expected the publication contract in guidance for: {question}',
+            'Use files=[] for an inline answer' in guidance,
+            f'Expected inline answers and clarifications to remain attachment-free for: {question}',
         )
         assert_true(
-            'cannot create or attach files' in guidance,
-            f'Expected the no-refusal rule in guidance for: {question}',
+            'Never say a file is attached' in guidance,
+            f'Expected attachment claims to wait for publication for: {question}',
         )
         assert_true(
-            'do not invent rows' in guidance,
-            f'Expected the existing no-invented-rows rule to survive for: {question}',
+            'include every requested format' in guidance
+            and 'ordered blocks of heading, paragraph, list, and table content' in guidance,
+            f'Expected complete structured document declarations for: {question}',
         )
 
 
@@ -235,9 +221,9 @@ def run_tests() -> bool:
         test_row_fallback_is_limited_to_structured_formats,
         test_row_fallback_requires_a_passthrough_contract,
         test_clarification_turn_publishes_no_artifact_in_any_format,
-        test_docx_and_pdf_still_publish_a_normal_answer,
-        test_docx_and_pdf_keep_the_reason_code_for_earlier_rows,
-        test_docx_and_pdf_guidance_states_the_publication_contract,
+        test_docx_and_pdf_require_a_validated_declaration,
+        test_docx_and_pdf_do_not_copy_earlier_action_rows_without_declaration,
+        test_docx_and_pdf_guidance_states_the_declaration_contract,
     ]
 
     results = []

@@ -49,6 +49,145 @@ def _fulfill_json(route, payload, status=200):
 
 
 @pytest.mark.ui
+def test_word_quick_action_does_not_duplicate_a_generated_document(playwright):
+    """Exercise the real quick-action renderer with and without a DOCX artifact."""
+    source_path = (
+        Path(__file__).resolve().parents[1]
+        / "application" / "single_app" / "static" / "js" / "chat" / "chat-messages.js"
+    )
+    source = source_path.read_text(encoding="utf-8")
+    constants = source[
+        source.index("const INLINE_ASSISTANT_EXPORT_ACTIONS ="):
+        source.index("const MAX_SUGGESTED_FOLLOW_UP_ACTIONS")
+    ]
+    prompt_helpers = source[
+        source.index("  function getLatestUserPromptText()"):
+        source.index("  function isStreamingAssistantPlaceholder(")
+    ]
+    artifact_helpers = source[
+        source.index("  function buildInlineAssistantExportActionsHtml("):
+        source.index("  function getGeneratedTabularOutputs(")
+    ]
+
+    browser = playwright.chromium.launch()
+    page = browser.new_page()
+    try:
+        page.set_content(
+            '<div id="chatbox"><div class="message user-message">'
+            '<div class="message-text">Create a Word document and presentation.</div>'
+            '</div></div><div id="actions"></div>'
+        )
+        page.add_script_tag(content=(
+            "const chatbox = document.getElementById('chatbox');\n"
+            + constants + prompt_helpers + artifact_helpers
+            + "\nwindow.renderActions = (message, text = '') => { "
+            "document.getElementById('actions').innerHTML = "
+            "buildInlineAssistantExportActionsHtml('assistant-1', message, text); };"
+        ))
+
+        page.evaluate("window.renderActions({}, 'Before I generate the Word file, what font and size would you like?')")
+        expect(page.locator("#actions .inline-export-word-btn")).to_have_count(0)
+        expect(page.locator("#actions .inline-export-ppt-btn")).to_have_count(1)
+        page.evaluate("window.renderActions({metadata: {pending_document_copy: {}}}, 'Please confirm your preference.')")
+        expect(page.locator("#actions .inline-export-word-btn")).to_have_count(0)
+
+        page.evaluate("window.renderActions({metadata: {generated_analysis_artifacts: ["
+                      "{artifact_message_id: 'docx-1', output_format: 'docx', file_name: 'result.docx'}]}})")
+        expect(page.locator("#actions .inline-export-word-btn")).to_have_count(0)
+        expect(page.locator("#actions .inline-export-ppt-btn")).to_have_count(1)
+
+        for metadata in [
+            {},
+            {"generated_analysis_artifacts": [{"artifact_message_id": "pdf-1", "output_format": "pdf"}]},
+            {"generated_analysis_artifacts": [{"output_format": "docx"}]},
+        ]:
+            page.evaluate("metadata => window.renderActions({metadata})", metadata)
+            expect(page.locator("#actions .inline-export-word-btn")).to_have_count(1)
+
+        page.evaluate("window.renderActions({metadata: {generated_tabular_outputs: ["
+                      "{artifact_message_id: 'docx-2', file_name: 'result.DOCX'}]}})")
+        expect(page.locator("#actions .inline-export-word-btn")).to_have_count(0)
+    finally:
+        page.close()
+        browser.close()
+
+
+@pytest.mark.ui
+def test_generated_word_download_replaces_quick_action_in_live_and_history(playwright):
+    """Keep the saved document download, but not a misleading acknowledgement export."""
+    _require_ui_env()
+    browser = playwright.chromium.launch()
+    context = browser.new_context(storage_state=STORAGE_STATE, accept_downloads=True)
+    page = context.new_page()
+    download_urls = []
+    page.route(
+        "**/api/user/settings",
+        lambda route: _fulfill_json(route, {"selected_agent": None, "settings": {"enable_agents": False}}),
+    )
+    page.route("**/api/get_conversations", lambda route: _fulfill_json(route, {"conversations": []}))
+
+    def handle_download(route):
+        download_urls.append(route.request.url)
+        route.fulfill(
+            status=200,
+            headers={
+                "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "Content-Disposition": 'attachment; filename="generated_output.docx"',
+            },
+            body=b"test-generated-document",
+        )
+
+    page.route("**/api/chat_artifacts/download?**", handle_download)
+    try:
+        page.goto(f"{BASE_URL}/chats", wait_until="domcontentloaded")
+        page.wait_for_selector("#chatbox")
+        page.wait_for_function("() => window.chatMessages && typeof window.chatMessages.appendMessage === 'function'")
+        page.evaluate(
+            """
+            async () => {
+                const conversationId = 'word-export-actions-test';
+                currentConversationId = conversationId;
+                window.currentConversationId = conversationId;
+                const messages = await import('/static/js/chat/chat-messages.js');
+                for (const [suffix, isNew] of [['live', true], ['history', false]]) {
+                    const prompt = 'Generate a Word doc with that list.';
+                    messages.appendMessage('You', prompt, null, `user-${suffix}`, false, [], [], [],
+                        null, null, { id: `user-${suffix}`, role: 'user', content: prompt }, isNew);
+                    messages.appendMessage('AI', 'The document is ready.', null, `assistant-${suffix}`,
+                        false, [], [], [], null, null, {
+                            id: `assistant-${suffix}`,
+                            role: 'assistant',
+                            metadata: {
+                                generated_analysis_artifacts: [{
+                                    capability: 'file_export',
+                                    artifact_message_id: `artifact-${suffix}`,
+                                    conversation_id: conversationId,
+                                    file_name: 'generated_output.docx',
+                                    output_format: 'docx',
+                                }],
+                            },
+                        }, isNew);
+                }
+            }
+            """
+        )
+
+        for suffix in ("live", "history"):
+            message = page.locator(f'[data-message-id="assistant-{suffix}"]')
+            expect(message.locator(".inline-export-word-btn")).to_have_count(0)
+            expect(message.locator(".dropdown-export-word-btn")).to_have_count(1)
+            download_button = message.get_by_role("button", name="Download generated_output.docx")
+            expect(download_button).to_be_visible()
+            with page.expect_download() as download_info:
+                download_button.click()
+            assert download_info.value.suggested_filename == "generated_output.docx"
+            assert f"message_id=artifact-{suffix}" in download_urls[-1]
+    finally:
+        context.close()
+        browser.close()
+
+
+@pytest.mark.ui
 def test_assistant_inline_export_actions_follow_latest_user_request(playwright):
     """Validate inline export actions appear only for matching new assistant replies."""
     _require_ui_env()

@@ -3375,13 +3375,26 @@ function renderReplyQuoteHtml(fullMessageObject = null) {
     }
   });
 
-  function buildInlineAssistantExportActionsHtml(messageId) {
+  function buildInlineAssistantExportActionsHtml(messageId, fullMessageObject = null, messageContent = '') {
     const previousMessage = getMostRecentRenderedMessage();
     if (!(previousMessage instanceof HTMLElement) || !previousMessage.classList.contains('user-message')) {
       return '';
     }
 
-    const actionTypes = getInlineAssistantExportActionTypes(getLatestUserPromptText());
+    const hasGeneratedWordArtifact = getGeneratedAnalysisArtifacts(fullMessageObject).some(output => {
+      const outputFormat = String(output.output_format || '').trim().toLowerCase();
+      const fileName = String(output.file_name || '').trim().toLowerCase();
+      return Boolean(output.artifact_message_id || output.document_id)
+        && (outputFormat === 'docx' || (!outputFormat && fileName.endsWith('.docx')));
+    });
+    const isDocumentClarification = Boolean(
+      fullMessageObject?.metadata?.pending_document_copy
+      || fullMessageObject?.metadata?.pending_document_candidate
+      || fullMessageObject?.metadata?.pending_document_recovery
+      || (String(messageContent || '').trim().length <= 600 && String(messageContent || '').trim().endsWith('?'))
+    );
+    const actionTypes = getInlineAssistantExportActionTypes(getLatestUserPromptText())
+      .filter(actionType => actionType !== 'word' || (!hasGeneratedWordArtifact && !isDocumentClarification));
     if (!actionTypes.length) {
       return '';
     }
@@ -5894,7 +5907,7 @@ export function appendMessage(
     const renderedAiContent = renderAiMessageContent(messageContent);
     const htmlContent = renderedAiContent.htmlContent;
     const inlineAssistantExportActionsHtml = renderCompletedAssistantActions
-      ? buildInlineAssistantExportActionsHtml(messageId)
+      ? buildInlineAssistantExportActionsHtml(messageId, fullMessageObject, messageContent)
       : '';
 
     const mainMessageHtml = `<div class="message-text">${htmlContent}</div>`; // Renamed for clarity

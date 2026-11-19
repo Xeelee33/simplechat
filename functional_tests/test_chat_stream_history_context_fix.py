@@ -196,6 +196,53 @@ def test_history_builder_filters_inactive_and_masked_messages():
     return True
 
 
+def test_generated_artifacts_and_inactive_retries_do_not_displace_prior_answer():
+    namespace, _ = load_history_helpers()
+    build_segments = namespace["build_conversation_history_segments"]
+    messages = [
+        {"id": "u1", "role": "user", "content": "Give me a checklist.", "metadata": {}},
+        {"id": "a1", "role": "assistant", "content": "Full checklist: alpha, beta.", "metadata": {}},
+        {"id": "u2-old", "role": "user", "content": "Old attempt", "metadata": {"thread_info": {"active_thread": False}}},
+        {"id": "u2", "role": "user", "content": "Create a Word document.", "metadata": {}},
+        {"id": "artifact", "role": "file", "content": "", "metadata": {"is_generated_chat_artifact": True}},
+        {"id": "a2", "role": "assistant", "content": "Document ready.", "metadata": {}},
+        {"id": "u3", "role": "user", "content": "Create a PDF instead.", "metadata": {}},
+    ]
+    result = build_segments(
+        all_messages=messages,
+        conversation_history_limit=5,
+        user_message_id="u3",
+        fallback_user_message="Create a PDF instead.",
+        include_assistant_citation_context=False,
+    )
+    assert [message["content"] for message in result["history_messages"]] == [
+        "Give me a checklist.",
+        "Full checklist: alpha, beta.",
+        "Create a Word document.",
+        "Document ready.",
+        "Create a PDF instead.",
+    ]
+    messages.extend([
+        {"id": "a3", "role": "assistant", "content": "Please resend the list.", "metadata": {}},
+        {"id": "u4", "role": "user", "content": "The earlier checklist.", "metadata": {}},
+    ])
+    clarification_result = build_segments(
+        all_messages=messages,
+        conversation_history_limit=6,
+        user_message_id="u4",
+        fallback_user_message="The earlier checklist.",
+        include_assistant_citation_context=False,
+    )
+    assert [message["content"] for message in clarification_result["history_messages"]] == [
+        "Full checklist: alpha, beta.",
+        "Create a Word document.",
+        "Document ready.",
+        "Create a PDF instead.",
+        "Please resend the list.",
+        "The earlier checklist.",
+    ]
+
+
 def test_streaming_and_non_streaming_paths_share_history_builder():
     print("🔍 Testing shared history builder wiring...")
 

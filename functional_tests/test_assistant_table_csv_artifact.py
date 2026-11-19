@@ -43,12 +43,16 @@ from functions_assistant_table_exports import (  # noqa: E402
     neutralize_csv_spreadsheet_formula,
 )
 from functions_generated_file_exports import (  # noqa: E402
+    MODEL_GENERATED_CSV_GUIDANCE,
+    MODEL_GENERATED_FILE_GUIDANCE,
     MODEL_UNSTRUCTURED_CSV_GUIDANCE,
+    MODEL_UNSTRUCTURED_FILE_GUIDANCE,
     build_model_generated_csv_response_format,
     build_generated_file_artifact_metadata,
     build_generated_file_export,
     get_generated_file_export_content,
     get_requested_generated_file_format,
+    get_requested_generated_file_formats,
     has_generated_file_output,
     extract_model_generated_chat_response,
     parse_model_generated_csv_response,
@@ -129,7 +133,12 @@ def load_chat_completion_fallback_helper():
     ]
     if {node.name for node in selected_nodes} != helper_names:
         raise AssertionError('Expected the structured response-format fallback helpers.')
-    namespace = {'MODEL_UNSTRUCTURED_CSV_GUIDANCE': MODEL_UNSTRUCTURED_CSV_GUIDANCE}
+    namespace = {
+        'MODEL_GENERATED_CSV_GUIDANCE': MODEL_GENERATED_CSV_GUIDANCE,
+        'MODEL_GENERATED_FILE_GUIDANCE': MODEL_GENERATED_FILE_GUIDANCE,
+        'MODEL_UNSTRUCTURED_CSV_GUIDANCE': MODEL_UNSTRUCTURED_CSV_GUIDANCE,
+        'MODEL_UNSTRUCTURED_FILE_GUIDANCE': MODEL_UNSTRUCTURED_FILE_GUIDANCE,
+    }
     extracted_module = ast.Module(body=selected_nodes, type_ignores=[])
     exec(compile(extracted_module, str(CHAT_ROUTE_FILE), 'exec'), namespace)
     return namespace['_create_chat_completion_with_response_format_fallback']
@@ -341,12 +350,12 @@ def test_function_results_render_docx_and_pdf_capabilities():
         'success': True,
         'function_result': {'value': [{'Name': 'Ada', 'Department': 'Engineering'}]},
     }]
-    docx_export = build_generated_file_export(
+    undeclared_docx_export = build_generated_file_export(
         'create a Word document from the action results',
         'The directory action completed successfully.',
         function_results=function_results,
     )
-    pdf_export = build_generated_file_export(
+    undeclared_pdf_export = build_generated_file_export(
         'export the action results to PDF',
         'The directory action completed successfully.',
         function_results=function_results,
@@ -356,18 +365,43 @@ def test_function_results_render_docx_and_pdf_capabilities():
     assert_true(get_requested_generated_file_format('export to PDF') == 'pdf', 'Expected PDF output intent.')
     assert_true(get_requested_generated_file_format('I need a DOCX') == 'docx', 'Expected natural DOCX output intent.')
     assert_true(get_requested_generated_file_format('Give me a PDF') == 'pdf', 'Expected natural PDF output intent.')
-    assert_true(docx_export is not None and docx_export['file_content'].startswith(b'PK'), 'Expected a DOCX file export.')
-    assert_true(pdf_export is not None and pdf_export['file_content'].startswith(b'%PDF'), 'Expected a PDF file export.')
-    assert_true(docx_export['row_source'] == 'structured function result', 'Expected DOCX to include function-result rows.')
-    assert_true(pdf_export['row_source'] == 'structured function result', 'Expected PDF to include function-result rows.')
-    assert_true(
-        docx_export.get('passthrough_reason_code') == 'explicit_format_conversion',
-        'Expected Word function-result serialization to record its explicit format-conversion contract.',
-    )
-    assert_true(
-        pdf_export.get('passthrough_reason_code') == 'explicit_format_conversion',
-        'Expected PDF function-result serialization to record its explicit format-conversion contract.',
-    )
+    assert_true(undeclared_docx_export is None, 'Expected prose and function rows not to create a DOCX.')
+    assert_true(undeclared_pdf_export is None, 'Expected prose and function rows not to create a PDF.')
+    for output_format, question, signature in (
+        ('docx', 'create a Word document from the action results', b'PK'),
+        ('pdf', 'export the action results to PDF', b'%PDF'),
+    ):
+        export_payload = build_generated_file_export(
+            question,
+            'The directory action completed successfully.',
+            function_results=function_results,
+            structured_file_spec={
+                'format': output_format,
+                'title': 'People',
+                'columns': [],
+                'rows': [],
+                'row_source': 'model',
+                'source_action': '',
+                'formatting': {
+                    'title_font': '', 'title_size': 0, 'heading_font': '', 'heading_size': 0,
+                    'body_font': '', 'body_size': 0,
+                },
+                'blocks': [{
+                    'type': 'paragraph',
+                    'text': 'Ada works in Engineering.',
+                    'level': 0,
+                    'items': [],
+                    'columns': [],
+                    'rows': [],
+                }],
+            },
+        )
+        assert_true(export_payload is not None, f'Expected a declared {output_format.upper()} file export.')
+        assert_true(
+            export_payload['file_content'].startswith(signature),
+            f'Expected server-rendered {output_format.upper()} bytes.',
+        )
+        assert_true(export_payload['row_count'] == 0, 'Expected document output not to serialize function-result rows.')
 
 
 def test_derived_word_export_does_not_serialize_function_rows():
@@ -385,10 +419,7 @@ def test_derived_word_export_does_not_serialize_function_rows():
         }],
     )
 
-    assert_true(export_payload is not None, 'Expected the assistant response to remain exportable as a Word document.')
-    assert_true(export_payload['row_source'] == 'assistant response', 'Expected derived function rows to remain excluded.')
-    assert_true(export_payload['row_count'] == 0, 'Expected no untransformed function rows in the derived Word export.')
-    assert_true('passthrough_reason_code' not in export_payload, 'Expected no passthrough claim for a derived request.')
+    assert_true(export_payload is None, 'Expected an undeclared derived document request not to create a file.')
 
 
 def test_plain_document_csv_response_excludes_surrounding_prose_and_citation():
@@ -1148,7 +1179,7 @@ def test_structured_response_format_rejection_retries_as_plain_text():
     fallback = load_chat_completion_fallback_helper()
     client = FakeClient()
     messages = [
-        {'role': 'system', 'content': 'Return a concise user-facing answer in chat_response. Use the schema.'},
+        {'role': 'system', 'content': MODEL_GENERATED_CSV_GUIDANCE},
         {'role': 'user', 'content': 'Create a CSV.'},
     ]
     response = fallback(client, {
@@ -1183,6 +1214,7 @@ def test_workflow_generated_file_artifacts_reuse_shared_contract():
         'build_generated_file_artifact_metadata': build_generated_file_artifact_metadata,
         'build_generated_file_export': build_generated_file_export,
         'get_requested_generated_file_format': get_requested_generated_file_format,
+        'get_requested_generated_file_formats': get_requested_generated_file_formats,
         'has_generated_file_output': has_generated_file_output,
         'has_generated_tabular_csv_output': lambda outputs: any(
             output.get('output_format') == 'csv'
@@ -1238,6 +1270,26 @@ Source: ParkingPrint.pdf, Page: 1
         'conversation-1',
         word_workflow['task_prompt'],
         'The directory action completed successfully.',
+        structured_file_spec={
+            'format': 'docx',
+            'title': 'People',
+            'columns': [],
+            'rows': [],
+            'row_source': 'model',
+            'source_action': '',
+            'formatting': {
+                'title_font': '', 'title_size': 0, 'heading_font': '', 'heading_size': 0,
+                'body_font': '', 'body_size': 0,
+            },
+            'blocks': [{
+                'type': 'paragraph',
+                'text': 'Ada works in Engineering.',
+                'level': 0,
+                'items': [],
+                'columns': [],
+                'rows': [],
+            }],
+        },
         function_results=[{
             'plugin_name': 'DirectoryPlugin',
             'function_name': 'list_people',
@@ -1329,8 +1381,9 @@ def test_csv_artifact_card_appends_below_assistant_response():
 
     chat_route_content = read_text(CHAT_ROUTE_FILE)
     assert_true(
-        "suppress_streamed_file_payload = requested_streamed_file_format in {'json', 'xml'}" in chat_route_content,
-        'Expected JSON/XML payload suppression to remain enabled for their existing artifact flow.',
+        "output_format in {'json', 'xml', 'docx', 'pdf'}" in chat_route_content
+        and 'suppress_streamed_file_payload = any(' in chat_route_content,
+        'Expected structured artifact envelopes to be suppressed while streaming.',
     )
     assert_true(
         '_supports_structured_csv_response(' in chat_route_content
@@ -1415,7 +1468,7 @@ def test_chat_route_wires_assistant_table_artifacts():
         'Expected workflows to pass current-turn action results to generated-file exports.',
     )
     assert_true(
-        chat_route_content.count('require_structured_csv_spec=True') >= 2,
+        chat_route_content.count('require_structured_csv_spec=True') >= 1,
         'Expected direct chat finalizers to require model-declared CSV specs for assistant-derived files.',
     )
     assert_true(
@@ -1424,8 +1477,13 @@ def test_chat_route_wires_assistant_table_artifacts():
         'Expected structured response instructions to distinguish in-chat tables from CSV artifacts.',
     )
     assert_true(
-        "structured_csv_guidance_format in {'', 'csv'}" in chat_route_content,
+        "structured_file_guidance_formats == ['csv']" in chat_route_content,
         'Expected normal table and explicit CSV chats to use structured output when supported.',
+    )
+    assert_true(
+        'get_requested_structured_artifact_formats(user_message)' in chat_route_content
+        and 'and not legacy_structured_artifact_requested' in chat_route_content,
+        'Expected JSON/XML requests to stay on their existing artifact path instead of CSV/DOCX schemas.',
     )
     assert_true(
         'if not assistant_csv_export_requested(user_question):' in generated_exports_content,

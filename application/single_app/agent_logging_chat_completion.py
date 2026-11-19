@@ -10,7 +10,14 @@ from semantic_kernel.functions import KernelArguments
 from semantic_kernel.connectors.ai.function_choice_behavior import FunctionChoiceBehavior
 from semantic_kernel.connectors.ai.prompt_execution_settings import PromptExecutionSettings
 from semantic_kernel.contents import ChatMessageContent, StreamingChatMessageContent
-from functions_generated_file_exports import prepare_model_csv_response, decode_model_csv_response
+from functions_generated_file_exports import (
+    MODEL_UNSTRUCTURED_FILE_GUIDANCE,
+    decode_model_generated_file_response,
+    get_requested_generated_file_formats,
+    parse_model_generated_file_response,
+    prepare_model_generated_file_response,
+    sanitize_unstructured_model_generated_file_response,
+)
 from functions_m365_agent_continuation import (
     m365_agent_continuation,
     m365_agent_stream_continuation,
@@ -201,6 +208,7 @@ class LoggingChatCompletionAgent(ChatCompletionAgent):
     def _prepare_csv_invocation(self, args, kwargs):
         enabled = kwargs.pop('csv_response', False)
         response_only = kwargs.pop('csv_response_only', False)
+        requested_file_formats = kwargs.pop('file_response_formats', None)
         if not enabled:
             return args, kwargs, False
         arguments = self._merge_arguments(kwargs.get('arguments'))
@@ -229,7 +237,11 @@ class LoggingChatCompletionAgent(ChatCompletionAgent):
             }
             for message in original_messages
         ]
-        response_format = prepare_model_csv_response(messages, self.deployment_name)
+        response_format = prepare_model_generated_file_response(
+            messages,
+            self.deployment_name,
+            requested_formats=requested_file_formats,
+        )
         prepared_messages = [
             ChatMessageContent(**message) if isinstance(message, dict) else message
             for message in original_messages
@@ -272,6 +284,10 @@ class LoggingChatCompletionAgent(ChatCompletionAgent):
             self._user_question = args[0][-1].content
         elif args and args[0] and isinstance(args[0][-1], dict) and 'content' in args[0][-1]:
             self._user_question = args[0][-1]['content']
+        unstructured_document_request = (
+            not csv_response
+            and self._is_document_file_request(args, kwargs)
+        )
         
         response = None
         try:
@@ -314,14 +330,36 @@ class LoggingChatCompletionAgent(ChatCompletionAgent):
             self._capture_tool_invocations_simplified(args, response)
             
             if csv_response:
-                visible_text, file_spec = decode_model_csv_response(str(response or ''))
+                response_text = str(response or '')
+                visible_text, file_specs = decode_model_generated_file_response(response_text)
+                parsed_document = parse_model_generated_file_response(response_text)
+                csv_file_spec = next(
+                    (file_spec for file_spec in file_specs if file_spec.get('format') == 'csv'),
+                    None,
+                )
                 return ChatMessageContent(
                     role='assistant',
                     content=visible_text,
                     ai_model_id=getattr(response, 'ai_model_id', None),
                     inner_content=getattr(response, 'inner_content', None),
-                    metadata={**(getattr(response, 'metadata', None) or {}), 'csv_file_spec': file_spec},
+                    metadata={
+                        **(getattr(response, 'metadata', None) or {}),
+                        'csv_file_spec': csv_file_spec,
+                        'generated_file_specs': file_specs,
+                        'pending_copy_source': (parsed_document or {}).get('pending_copy_source', 'none'),
+                    },
                 )
+            if unstructured_document_request:
+                response_text = str(getattr(response, 'content', response) or '')
+                visible_text = sanitize_unstructured_model_generated_file_response(response_text)
+                if visible_text != response_text:
+                    return ChatMessageContent(
+                        role='assistant',
+                        content=visible_text,
+                        ai_model_id=getattr(response, 'ai_model_id', None),
+                        inner_content=getattr(response, 'inner_content', None),
+                        metadata=getattr(response, 'metadata', None) or {},
+                    )
             return response
         finally:
             usage = getattr(response, "usage", None)
@@ -341,23 +379,87 @@ class LoggingChatCompletionAgent(ChatCompletionAgent):
     @m365_agent_stream_continuation
     async def invoke_stream(self, *args, **kwargs):
         args, kwargs, csv_response = self._prepare_csv_invocation(args, kwargs)
+        unstructured_document_request = (
+            not csv_response
+            and self._is_document_file_request(args, kwargs)
+        )
         response_parts = []
         response_metadata = {}
+        response_ai_model_id = None
+        response_inner_content = None
         async with aclosing(super().invoke_stream(*args, **kwargs)) as stream:
             async for response in stream:
-                if not csv_response:
+                if not csv_response and not unstructured_document_request:
                     yield response
                     continue
                 response_parts.append(str(response.content or ''))
                 response_metadata.update(getattr(response, 'metadata', None) or {})
+                response_ai_model_id = getattr(response, 'ai_model_id', None) or response_ai_model_id
+                response_inner_content = getattr(response, 'inner_content', None) or response_inner_content
         if csv_response:
-            visible_text, file_spec = decode_model_csv_response(''.join(response_parts))
+            response_text = ''.join(response_parts)
+            visible_text, file_specs = decode_model_generated_file_response(response_text)
+            parsed_document = parse_model_generated_file_response(response_text)
+            csv_file_spec = next(
+                (file_spec for file_spec in file_specs if file_spec.get('format') == 'csv'),
+                None,
+            )
             yield StreamingChatMessageContent(
                 choice_index=0,
                 role='assistant',
                 content=visible_text,
-                metadata={**response_metadata, 'csv_file_spec': file_spec},
+                ai_model_id=response_ai_model_id,
+                inner_content=response_inner_content,
+                metadata={
+                    **response_metadata,
+                    'csv_file_spec': csv_file_spec,
+                    'generated_file_specs': file_specs,
+                    'pending_copy_source': (parsed_document or {}).get('pending_copy_source', 'none'),
+                },
             )
+        elif unstructured_document_request:
+            visible_text = sanitize_unstructured_model_generated_file_response(''.join(response_parts))
+            yield StreamingChatMessageContent(
+                choice_index=0,
+                role='assistant',
+                content=visible_text,
+                ai_model_id=response_ai_model_id,
+                inner_content=response_inner_content,
+                metadata=response_metadata,
+            )
+
+    @staticmethod
+    def _is_document_file_request(args, kwargs=None):
+        messages = args[0] if args else (kwargs or {}).get('messages', [])
+        if isinstance(messages, str):
+            messages = [{'role': 'user', 'content': messages}]
+        if isinstance(messages, (ChatMessageContent, dict)):
+            messages = [messages]
+        normalized_messages = list(messages or [])
+        if any(
+            str(
+                message.get('content')
+                if isinstance(message, dict)
+                else getattr(message, 'content', '')
+            ) == MODEL_UNSTRUCTURED_FILE_GUIDANCE
+            for message in normalized_messages
+        ):
+            return True
+        for message in reversed(normalized_messages):
+            if isinstance(message, dict):
+                role = message.get('role')
+                content = message.get('content')
+            else:
+                role = getattr(message, 'role', None)
+                role = getattr(role, 'value', role)
+                content = getattr(message, 'content', None)
+            if str(role or '').lower() != 'user':
+                continue
+            return any(
+                output_format in {'docx', 'pdf'}
+                for output_format in get_requested_generated_file_formats(str(content or ''))
+            )
+        return False
 
     def _capture_tool_invocations_simplified(self, args, response):
         """

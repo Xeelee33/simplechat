@@ -1,8 +1,8 @@
 # test_document_action_token_usage_aggregation.py
 """
 Functional test for document action token usage aggregation.
-Version: 0.250.115
-Implemented in: 0.241.116; updated for generated file exports in 0.250.072; updated in 0.250.073; updated for PR 1145 duplicate fixture key remediation in 0.250.115
+Version: 0.261.053
+Implemented in: 0.241.116; updated for generated file exports in 0.250.072; updated in 0.250.073; updated for PR 1145 duplicate fixture key remediation in 0.250.115; updated for structured generated-file finalization in 0.261.053
 
 This test ensures analysis and comparison aggregate tokens across
 all internal model calls and persist the aggregate usage on assistant metadata.
@@ -297,9 +297,17 @@ def test_workflow_assistant_persists_token_usage():
             '_get_document_action_config': lambda workflow: workflow.get('document_action', {}),
             '_get_workflow_scope': lambda workflow: 'personal',
             '_get_workflow_group_id': lambda workflow: '',
+            'generated_file_specs_match_request': lambda prompt, specs: True,
             '_maybe_create_workflow_generated_file_output': lambda **kwargs: None,
             'get_generated_file_export_content': lambda result: result.get('reply', ''),
             '_persist_agent_citation_artifacts': lambda **kwargs: [],
+            'apply_agent_document_citations': lambda *args, **kwargs: None,
+            'build_cited_source_subsets': lambda *args, **kwargs: {
+                'cited_hybrid_citations': [],
+            },
+            'attach_m365_message_provenance': lambda item: item,
+            'initialize_conversation_used_document_tracking': lambda conversation: None,
+            'merge_cited_documents_into_conversation': lambda *args, **kwargs: None,
             'cosmos_messages_container': message_container,
             'cosmos_conversations_container': conversation_container,
             'log_token_usage': lambda **kwargs: logged_usage.append(kwargs),
